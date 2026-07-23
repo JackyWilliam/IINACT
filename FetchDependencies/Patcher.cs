@@ -35,6 +35,21 @@ internal class Patcher
             plugin.Assembly.MainModule.Resources.Remove(resource);
         }
 
+        // Costura's module initializer only installs the embedded-assembly resolver.
+        // All Costura resources are extracted above, so retaining the initializer is
+        // unnecessary. Rewriting the assembly can otherwise leave a poison initializer
+        // (`ldnull; throw`) that makes the patched plugin fail as soon as it is loaded.
+        var moduleInitializer = plugin.Assembly.MainModule.Types
+                                      .First(type => type.Name == "<Module>")
+                                      .Methods
+                                      .FirstOrDefault(method => method.Name == ".cctor");
+        if (moduleInitializer is not null)
+        {
+            var moduleInitializerIl = moduleInitializer.Body.GetILProcessor();
+            moduleInitializerIl.Clear();
+            moduleInitializerIl.Emit(OpCodes.Ret);
+        }
+
         var method = plugin.GetMethod(
             "System.Void FFXIV_ACT_Plugin.ACTWrapper::RunOnACTUIThread(System.Action)");
         var ilProcessor = method.Body.GetILProcessor();
