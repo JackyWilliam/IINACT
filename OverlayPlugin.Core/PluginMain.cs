@@ -32,7 +32,7 @@ namespace RainbowMage.OverlayPlugin
         public string Status { get; private set; }
 
         internal string ConfigPath { get; private set; }
-        private Timer _configSaveTimer;
+        private System.Windows.Forms.Timer _configSaveTimer;
 
         internal PluginConfig Config { get; private set; }
         internal List<IOverlay> Overlays { get; private set; }
@@ -46,7 +46,7 @@ namespace RainbowMage.OverlayPlugin
             PluginDirectory = pluginDirectory;
             _logger = logger;
 
-            _configSaveTimer = new Timer();
+            _configSaveTimer = new System.Windows.Forms.Timer();
             _configSaveTimer.Interval = 300000; // 5 minutes
             _configSaveTimer.Tick += (o, e) => SaveConfig();
 
