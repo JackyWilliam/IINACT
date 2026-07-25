@@ -178,6 +178,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     }
 
     public event CombatActionDelegate AfterCombatAction;
+    public event Action<EncounterData>? AfterCombatEnd;
 
     public delegate void TextToSpeechDelegate(string text);
 
@@ -239,13 +240,18 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public void EndCombat(bool export)
     {
         if (inCombat) inCombat = false;
-        if (ActiveZone.ActiveEncounter.Active)
-        {
-            if (ActiveZone.PopulateAll)
-                ActiveZone.Items[0].EndCombat(Finalize: false);
+        var activeZone = ActiveZone;
+        var encounter = activeZone?.ActiveEncounter;
+        if (encounter is null || !encounter.Active)
+            return;
 
-            ActiveZone.ActiveEncounter.EndCombat(Finalize: true);
+        if (activeZone.PopulateAll && activeZone.Items.Count > 0)
+        {
+            activeZone.Items[0].EndCombat(Finalize: false);
         }
+
+        encounter.EndCombat(Finalize: true);
+        AfterCombatEnd?.Invoke(encounter);
     }
 
     public bool SelectiveListGetSelected(string Player)
