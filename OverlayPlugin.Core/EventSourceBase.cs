@@ -12,7 +12,7 @@ namespace RainbowMage.OverlayPlugin
         private EventDispatcher dispatcher;
         private bool updateRunning = false;
 
-        protected Timer timer;
+        protected System.Threading.Timer timer;
         protected ILogger logger;
         protected Dictionary<string, JObject> eventCache = new Dictionary<string, JObject>();
 
@@ -33,7 +33,7 @@ namespace RainbowMage.OverlayPlugin
             logger = container.Resolve<ILogger>();
             dispatcher = container.Resolve<EventDispatcher>();
 
-            timer = new Timer(UpdateWrapper, null, Timeout.Infinite, 1000);
+            timer = new System.Threading.Timer(UpdateWrapper, null, Timeout.Infinite, 1000);
         }
 
         protected void UpdateWrapper(object state)

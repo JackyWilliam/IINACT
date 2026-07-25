@@ -136,7 +136,9 @@ namespace RainbowMage.OverlayPlugin.EventSources
                 return null;
             }
 
-            static void HandleDeserializationError(object sender, ErrorEventArgs errorArgs) => 
+            static void HandleDeserializationError(
+                object sender,
+                Newtonsoft.Json.Serialization.ErrorEventArgs errorArgs) => 
                 errorArgs.ErrorContext.Handled = true;
 
             var settings = new Newtonsoft.Json.JsonSerializerSettings

@@ -6,20 +6,16 @@ namespace FetchDependencies;
 public class FetchDependencies
 {
     private const string VersionUrlGlobal = "https://www.iinact.com/updater/version";
-    private const string VersionUrlChinese = "https://cninact.diemoe.net/CN解析/版本.txt";
     private const string PluginUrlGlobal = "https://www.iinact.com/updater/download";
-    private const string PluginUrlChinese = "https://cninact.diemoe.net/CN解析/FFXIV_ACT_Plugin.dll";
 
     private Version PluginVersion { get; }
     private string DependenciesDir { get; }
-    private bool IsChinese { get; }
     private HttpClient HttpClient { get; }
 
     public FetchDependencies(Version version, string assemblyDir, bool isChinese, HttpClient httpClient)
     {
         PluginVersion = version;
         DependenciesDir = assemblyDir;
-        IsChinese = isChinese;
         HttpClient = httpClient;
     }
 
@@ -64,13 +60,15 @@ public class FetchDependencies
         {
             using var plugin = new TargetAssembly(dllPath);
 
+            if (plugin.HasProtectedPluginConstructor())
+                return true;
+
             if (!plugin.ApiVersionMatches())
                 return true;
             
             using var cancelAfterDelay = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             var remoteVersionString = HttpClient
-                                      .GetStringAsync(IsChinese ? VersionUrlChinese : VersionUrlGlobal,
-                                                      cancelAfterDelay.Token).Result;
+                                      .GetStringAsync(VersionUrlGlobal, cancelAfterDelay.Token).Result;
             var remoteVersion = new Version(remoteVersionString);
             return remoteVersion > plugin.Version;
         }
@@ -84,7 +82,12 @@ public class FetchDependencies
     {
         try
         {
-            DownloadFile(IsChinese ? PluginUrlChinese : PluginUrlGlobal, pluginZipPath);
+            // The CN mirror currently serves a protected launcher stub whose public
+            // methods are all `throw null` until its private loader runs. That loader
+            // cannot be hosted safely after Costura extraction, so use the official
+            // package for every region. Region-specific opcodes and language selection
+            // remain handled by IINACT and Machina.
+            DownloadFile(PluginUrlGlobal, pluginZipPath);
         }
         catch
         {

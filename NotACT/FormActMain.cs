@@ -11,6 +11,19 @@ namespace Advanced_Combat_Tracker;
 
 public partial class FormActMain : Form, ISynchronizeInvoke
 {
+    public delegate void PlayTtsDelegate(string text);
+    public delegate void PlaySoundDelegate(string fileName, int volume);
+
+    public List<ActPluginData> ActPlugins { get; } = new();
+
+    public bool InitActDone => true;
+
+    public PlayTtsDelegate? PlayTtsMethod;
+
+    public PlaySoundDelegate? PlaySoundMethod;
+
+    public ActPluginData? PluginGetSelfData(object plugin)
+        => ActPlugins.FirstOrDefault(entry => ReferenceEquals(entry.pluginObj, plugin));
     public delegate DateTime DateTimeLogParser(string logLine);
     public IPluginLog PluginLog { get; }
 
@@ -58,7 +71,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public string LogFilePath { get; set; }
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public DirectoryInfo AppDataFolder { get; private set; }
+    public DirectoryInfo AppDataFolder { get; set; }
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public ConcurrentQueue<string> LogQueue { get; private set; } = new();
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -72,6 +85,11 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public DateTime LastHostileTime { get; private set; }
     public object AfterCombatActionDataLock => ActGlobals.ActionDataLock;
+
+    public void SafeInvoke(Action action) => action();
+
+    public void PlaySoundWmpApi(string fileName, int volume)
+        => PlaySoundMethod?.Invoke(fileName, volume);
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Regex ZoneChangeRegex { get; set; }
@@ -178,6 +196,9 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     }
 
     public event CombatActionDelegate AfterCombatAction;
+    public event Action<EncounterData>? AfterCombatEnd;
+    public event CombatToggleEventDelegate? OnCombatStart;
+    public event CombatToggleEventDelegate? OnCombatEnd;
 
     public delegate void TextToSpeechDelegate(string text);
 
@@ -238,14 +259,24 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     public void EndCombat(bool export)
     {
+        var wasInCombat = inCombat;
         if (inCombat) inCombat = false;
-        if (ActiveZone.ActiveEncounter.Active)
-        {
-            if (ActiveZone.PopulateAll)
-                ActiveZone.Items[0].EndCombat(Finalize: false);
+        var activeZone = ActiveZone;
+        var encounter = activeZone?.ActiveEncounter;
+        if (encounter is null || !encounter.Active)
+            return;
 
-            ActiveZone.ActiveEncounter.EndCombat(Finalize: true);
+        if (activeZone!.PopulateAll && activeZone.Items.Count > 0)
+        {
+            activeZone.Items[0].EndCombat(Finalize: false);
         }
+
+        encounter.EndCombat(Finalize: true);
+        if (wasInCombat)
+        {
+            OnCombatEnd?.Invoke(false, new CombatToggleEventArgs(false, encounter));
+        }
+        AfterCombatEnd?.Invoke(encounter);
     }
 
     public bool SelectiveListGetSelected(string Player)
@@ -312,6 +343,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
                 refreshTree = true;
                 LastHostileTime = Time;
                 inCombat = true;
+                OnCombatStart?.Invoke(false, new CombatToggleEventArgs(false, ActiveZone.ActiveEncounter));
                 return true;
             }
 
@@ -323,6 +355,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
         refreshTree = true;
         LastHostileTime = Time;
         inCombat = true;
+        OnCombatStart?.Invoke(false, new CombatToggleEventArgs(false, ActiveZone.ActiveEncounter));
         return true;
     }
 

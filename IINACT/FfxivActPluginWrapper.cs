@@ -19,6 +19,8 @@ using FFXIV_ACT_Plugin.Resource;
 using IINACT.Network;
 using Microsoft.MinIoC;
 using ACTWrapper = FFXIV_ACT_Plugin.Common.ACTWrapper;
+using MachinaGameRegion = Machina.FFXIV.GameRegion;
+using MachinaOpcodeManager = Machina.FFXIV.Headers.Opcodes.OpcodeManager;
 
 namespace IINACT;
 
@@ -61,6 +63,7 @@ public partial class FfxivActPluginWrapper : IDisposable
     public ParseSettings ParseSettings = null!;
     public readonly IDataRepository Repository;
     public readonly IDataSubscription Subscription;
+    public IActPluginV1 ActPluginInstance => ffxivActPlugin;
 
     public unsafe FfxivActPluginWrapper(
         Configuration configuration, ClientLanguage dalamudClientLanguage, IChatGui chatGui, IFramework framework,
@@ -71,6 +74,8 @@ public partial class FfxivActPluginWrapper : IDisposable
         this.chatGui = chatGui;
         this.framework = framework;
         this.condition = condition;
+
+        ConfigureRegion(dalamudClientLanguage);
 
         ffxivActPlugin = new FFXIV_ACT_Plugin.FFXIV_ACT_Plugin();
         Plugin.Log.Information($"Initializing FFXIV_ACT_Plugin version {typeof(FFXIV_ACT_Plugin.FFXIV_ACT_Plugin).Assembly.GetName().Version}");
@@ -143,6 +148,15 @@ public partial class FfxivActPluginWrapper : IDisposable
             _ => dalamudClientLanguage.ToString() == "ChineseSimplified" ? Language.Chinese : Language.English
         };
 
+    private bool IsChineseClient
+        => dalamudClientLanguage.ToString() == "ChineseSimplified";
+
+    public static void ConfigureRegion(ClientLanguage clientLanguage)
+        => MachinaOpcodeManager.Instance.SetRegion(
+            clientLanguage.ToString() == "ChineseSimplified"
+                ? MachinaGameRegion.Chinese
+                : MachinaGameRegion.Global);
+
     public void Dispose()
     {
         cancellationTokenSource.Cancel();
@@ -170,7 +184,7 @@ public partial class FfxivActPluginWrapper : IDisposable
         DataCollectionSettings = new DataCollectionSettingsEventArgs
         {
             LogFileFolder = ActGlobals.oFormActMain.LogFilePath,
-            RegionID = Region.Global,
+            RegionID = IsChineseClient ? Region.Chinese : Region.Global,
             ProcessID = Environment.ProcessId
         };
         settingsMediator.DataCollectionSettings = DataCollectionSettings;
