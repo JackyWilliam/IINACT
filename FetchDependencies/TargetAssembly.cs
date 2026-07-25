@@ -1,5 +1,7 @@
 ﻿using Mono.Cecil;
 
+using Mono.Cecil.Cil;
+
 namespace FetchDependencies;
 
 internal class TargetAssembly : IDisposable
@@ -103,6 +105,23 @@ internal class TargetAssembly : IDisposable
                 return true;
         
         return false;
+    }
+
+    public bool HasProtectedPluginConstructor()
+    {
+        var constructor = Assembly.MainModule.Types
+                                  .FirstOrDefault(type =>
+                                                      type.Namespace == "FFXIV_ACT_Plugin" &&
+                                                      type.Name == "FFXIV_ACT_Plugin")
+                                  ?.Methods
+                                  .FirstOrDefault(method =>
+                                                      method.IsConstructor &&
+                                                      !method.IsStatic &&
+                                                      method.Parameters.Count == 0);
+        var instructions = constructor?.Body?.Instructions;
+        return instructions is { Count: 2 } &&
+               instructions[0].OpCode == OpCodes.Ldnull &&
+               instructions[1].OpCode == OpCodes.Throw;
     }
 
     public void WriteOut()
