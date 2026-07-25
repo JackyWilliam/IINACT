@@ -11,6 +11,19 @@ namespace Advanced_Combat_Tracker;
 
 public partial class FormActMain : Form, ISynchronizeInvoke
 {
+    public delegate void PlayTtsDelegate(string text);
+    public delegate void PlaySoundDelegate(string fileName, int volume);
+
+    public List<ActPluginData> ActPlugins { get; } = new();
+
+    public bool InitActDone => true;
+
+    public PlayTtsDelegate? PlayTtsMethod { get; set; }
+
+    public PlaySoundDelegate? PlaySoundMethod { get; set; }
+
+    public ActPluginData? PluginGetSelfData(object plugin)
+        => ActPlugins.FirstOrDefault(entry => ReferenceEquals(entry.pluginObj, plugin));
     public delegate DateTime DateTimeLogParser(string logLine);
     public IPluginLog PluginLog { get; }
 
@@ -58,7 +71,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public string LogFilePath { get; set; }
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public DirectoryInfo AppDataFolder { get; private set; }
+    public DirectoryInfo AppDataFolder { get; set; }
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public ConcurrentQueue<string> LogQueue { get; private set; } = new();
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -72,6 +85,11 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public DateTime LastHostileTime { get; private set; }
     public object AfterCombatActionDataLock => ActGlobals.ActionDataLock;
+
+    public void SafeInvoke(Action action) => action();
+
+    public void PlaySoundWmpApi(string fileName, int volume)
+        => PlaySoundMethod?.Invoke(fileName, volume);
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Regex ZoneChangeRegex { get; set; }

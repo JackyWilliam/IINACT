@@ -63,6 +63,7 @@ public partial class FfxivActPluginWrapper : IDisposable
     public ParseSettings ParseSettings = null!;
     public readonly IDataRepository Repository;
     public readonly IDataSubscription Subscription;
+    public IActPluginV1 ActPluginInstance => ffxivActPlugin;
 
     public unsafe FfxivActPluginWrapper(
         Configuration configuration, ClientLanguage dalamudClientLanguage, IChatGui chatGui, IFramework framework,
