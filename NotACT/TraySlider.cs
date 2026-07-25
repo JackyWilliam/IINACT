@@ -5,6 +5,13 @@ namespace Advanced_Combat_Tracker;
 /// </summary>
 public sealed class TraySlider : Form
 {
+    public enum ButtonLayoutEnum
+    {
+        OneButton,
+        TwoButton,
+        FourButton,
+    }
+
     private readonly Label titleLabel = new() { AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
     private readonly Label textLabel = new() { AutoSize = true };
 
@@ -35,6 +42,19 @@ public sealed class TraySlider : Form
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public int ShowDurationMs { get; set; } = 5000;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public ButtonLayoutEnum ButtonLayout { get; set; }
+
+    public Button ButtonOK { get; } = new();
+
+    public Button ButtonNE { get; } = new();
+
+    public Button ButtonNW { get; } = new();
+
+    public Button ButtonSE { get; } = new();
+
+    public Button ButtonSW { get; } = new();
 
     public Label TrayText => textLabel;
 
