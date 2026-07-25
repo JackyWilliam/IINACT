@@ -74,8 +74,7 @@ public partial class FfxivActPluginWrapper : IDisposable
         this.framework = framework;
         this.condition = condition;
 
-        MachinaOpcodeManager.Instance.SetRegion(
-            IsChineseClient ? MachinaGameRegion.Chinese : MachinaGameRegion.Global);
+        ConfigureRegion(dalamudClientLanguage);
 
         ffxivActPlugin = new FFXIV_ACT_Plugin.FFXIV_ACT_Plugin();
         Plugin.Log.Information($"Initializing FFXIV_ACT_Plugin version {typeof(FFXIV_ACT_Plugin.FFXIV_ACT_Plugin).Assembly.GetName().Version}");
@@ -150,6 +149,12 @@ public partial class FfxivActPluginWrapper : IDisposable
 
     private bool IsChineseClient
         => dalamudClientLanguage.ToString() == "ChineseSimplified";
+
+    public static void ConfigureRegion(ClientLanguage clientLanguage)
+        => MachinaOpcodeManager.Instance.SetRegion(
+            clientLanguage.ToString() == "ChineseSimplified"
+                ? MachinaGameRegion.Chinese
+                : MachinaGameRegion.Global);
 
     public void Dispose()
     {
