@@ -197,6 +197,8 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     public event CombatActionDelegate AfterCombatAction;
     public event Action<EncounterData>? AfterCombatEnd;
+    public event CombatToggleEventDelegate? OnCombatStart;
+    public event CombatToggleEventDelegate? OnCombatEnd;
 
     public delegate void TextToSpeechDelegate(string text);
 
@@ -257,18 +259,23 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     public void EndCombat(bool export)
     {
+        var wasInCombat = inCombat;
         if (inCombat) inCombat = false;
         var activeZone = ActiveZone;
         var encounter = activeZone?.ActiveEncounter;
         if (encounter is null || !encounter.Active)
             return;
 
-        if (activeZone.PopulateAll && activeZone.Items.Count > 0)
+        if (activeZone!.PopulateAll && activeZone.Items.Count > 0)
         {
             activeZone.Items[0].EndCombat(Finalize: false);
         }
 
         encounter.EndCombat(Finalize: true);
+        if (wasInCombat)
+        {
+            OnCombatEnd?.Invoke(false, new CombatToggleEventArgs(false, encounter));
+        }
         AfterCombatEnd?.Invoke(encounter);
     }
 
@@ -336,6 +343,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
                 refreshTree = true;
                 LastHostileTime = Time;
                 inCombat = true;
+                OnCombatStart?.Invoke(false, new CombatToggleEventArgs(false, ActiveZone.ActiveEncounter));
                 return true;
             }
 
@@ -347,6 +355,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
         refreshTree = true;
         LastHostileTime = Time;
         inCombat = true;
+        OnCombatStart?.Invoke(false, new CombatToggleEventArgs(false, ActiveZone.ActiveEncounter));
         return true;
     }
 
