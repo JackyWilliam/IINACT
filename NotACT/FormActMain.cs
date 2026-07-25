@@ -18,9 +18,9 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     public bool InitActDone => true;
 
-    public PlayTtsDelegate? PlayTtsMethod { get; set; }
+    public PlayTtsDelegate? PlayTtsMethod;
 
-    public PlaySoundDelegate? PlaySoundMethod { get; set; }
+    public PlaySoundDelegate? PlaySoundMethod;
 
     public ActPluginData? PluginGetSelfData(object plugin)
         => ActPlugins.FirstOrDefault(entry => ReferenceEquals(entry.pluginObj, plugin));
