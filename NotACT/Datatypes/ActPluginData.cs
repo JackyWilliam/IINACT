@@ -12,6 +12,8 @@ public sealed class ActPluginData
         lblPluginStatus = pluginStatus;
         lblPluginTitle = new Label { Text = pluginFile.Name };
         cbEnabled = new CheckBox { Checked = true };
+        pPluginInfo = new Panel();
+        btnXButton = new Button();
     }
 
     public FileInfo pluginFile;
@@ -20,4 +22,6 @@ public sealed class ActPluginData
     public Label lblPluginStatus;
     public Label lblPluginTitle;
     public CheckBox cbEnabled;
+    public Panel pPluginInfo;
+    public Button btnXButton;
 }
