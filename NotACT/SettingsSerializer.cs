@@ -7,7 +7,7 @@ namespace Advanced_Combat_Tracker;
 /// <summary>
 /// Compatibility implementation of ACT's simple plugin settings serializer.
 /// </summary>
-public sealed class SettingsSerializer : IDisposable
+public class SettingsSerializer : IDisposable
 {
     private readonly object owner;
     private readonly Dictionary<string, Control> controls = new(StringComparer.Ordinal);
