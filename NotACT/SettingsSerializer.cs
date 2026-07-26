@@ -65,7 +65,7 @@ public class SettingsSerializer : IDisposable
             var text = reader.ReadElementContentAsString();
             if (values.TryGetValue(name, out var type))
             {
-                SetMemberValue(name, ConvertFromString(text, type));
+                SetMemberValue(name, ConvertFromString(text, GetMemberType(name) ?? type));
                 imported++;
             }
             else if (controls.TryGetValue(name, out var control))
@@ -113,6 +113,21 @@ public class SettingsSerializer : IDisposable
         owner.GetType()
             .GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             ?.SetValue(owner, value);
+    }
+
+    private Type? GetMemberType(string name)
+    {
+        var property = owner.GetType().GetProperty(
+            name,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (property is not null)
+        {
+            return property.PropertyType;
+        }
+
+        return owner.GetType()
+            .GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            ?.FieldType;
     }
 
     private static string ConvertToString(object? value)
