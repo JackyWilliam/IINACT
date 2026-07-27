@@ -167,30 +167,48 @@ public class CactbotEventSource : EventSourceBase
     {
         Config = CactbotEventSourceConfig.LoadConfig(config, logger);
         Config.OverlayData ??= new Dictionary<string, JToken>();
-        if (EnsureSpokenAlertsEnabled(Config.OverlayData))
+        if (EnsureDefaultAlertOutput(Config.OverlayData))
         {
             Config.SaveConfig(config);
             config.Save();
-            LogInfo("Enabled Cactbot spoken alerts for the initial raidboss configuration.");
+            LogInfo("Normalized Cactbot's default raidboss alert output.");
         }
     }
 
-    internal static bool EnsureSpokenAlertsEnabled(Dictionary<string, JToken> overlayData)
+    internal static bool EnsureDefaultAlertOutput(Dictionary<string, JToken> overlayData)
     {
-        var options = overlayData.TryGetValue("options", out var optionsToken) &&
-                      optionsToken is JObject savedOptions
-            ? savedOptions
-            : new JObject();
-        overlayData["options"] = options;
-        var raidboss = options["raidboss"] as JObject ?? new JObject();
-        options["raidboss"] = raidboss;
-        if (raidboss["SpokenAlertsEnabled"] is not null)
+        var changed = false;
+        if (!overlayData.TryGetValue("options", out var optionsToken) ||
+            optionsToken is not JObject options)
         {
-            return false;
+            options = new JObject();
+            overlayData["options"] = options;
+            changed = true;
         }
 
-        raidboss["SpokenAlertsEnabled"] = true;
-        return true;
+        if (options["raidboss"] is not JObject raidboss)
+        {
+            raidboss = new JObject();
+            options["raidboss"] = raidboss;
+            changed = true;
+        }
+
+        if (raidboss["DefaultAlertOutput"] is null)
+        {
+            // SpokenAlertsEnabled is a derived runtime field, not a persisted cactbot option.
+            // v0.2.23-v0.2.24 wrote it directly, so migrate that value to the option consumed
+            // by raidboss_config.ts while preserving an explicit false value.
+            var legacySpokenAlerts = raidboss["SpokenAlertsEnabled"]?.Type == JTokenType.Boolean
+                ? raidboss["SpokenAlertsEnabled"]!.Value<bool>()
+                : (bool?)null;
+            raidboss["DefaultAlertOutput"] = legacySpokenAlerts == false
+                ? "textAndSound"
+                : "ttsAndText";
+            changed = true;
+        }
+
+        changed |= raidboss.Remove("SpokenAlertsEnabled");
+        return changed;
     }
 
     public override void SaveConfig(IPluginConfig config)
