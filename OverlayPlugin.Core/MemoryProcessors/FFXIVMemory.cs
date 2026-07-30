@@ -24,10 +24,11 @@ namespace RainbowMage.OverlayPlugin.MemoryProcessors
         private IntPtr processHandle;
         private FFXIVRepository repository;
 
-        // The "international" version always uses the most recent.
+        // Global, Chinese, and Korean are synchronized and use the most recent layout.
         private static Version globalVersion = new Version(99, 0);
-        private static Version cnVersion = new Version(6, 2);
-        private static Version koVersion = new Version(6, 1);
+        private static Version cnVersion = new Version(99, 0);
+        private static Version koVersion = new Version(99, 0);
+        private static Version tcVersion = new Version(7, 3);
 
         public FFXIVMemory(TinyIoCContainer container)
         {
@@ -54,7 +55,7 @@ namespace RainbowMage.OverlayPlugin.MemoryProcessors
                 CloseProcessHandle();
             }
 
-            if (proc == null)
+            if (proc == null || proc.HasExited)
                 return;
 
             if (proc.ProcessName == "ffxiv")
@@ -97,6 +98,12 @@ namespace RainbowMage.OverlayPlugin.MemoryProcessors
 
         public bool IsValid()
         {
+            if (process is { HasExited: true })
+            {
+                CloseProcessHandle();
+                OnProcessChange?.Invoke(this, null);
+            }
+
             if (processHandle != IntPtr.Zero)
                 return true;
 
@@ -428,6 +435,8 @@ namespace RainbowMage.OverlayPlugin.MemoryProcessors
                 target = cnVersion;
             else if (region == GameRegion.Korean)
                 target = koVersion;
+            else if (region == GameRegion.TraditionalChinese)
+                target = tcVersion;
             else
                 target = globalVersion;
 
