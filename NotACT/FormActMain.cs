@@ -217,14 +217,28 @@ public partial class FormActMain : Form, ISynchronizeInvoke
         if (BeforeLogLineRead == null || GetDateTimeFromLog == null)
             return;
         var parsedLogTime = GetDateTimeFromLog(logLine);
-        LastKnownTime = parsedLogTime;
-        var logLineEventArgs = new LogLineEventArgs(logLine, 0, parsedLogTime, CurrentZone, inCombat, "Plugin");
-        BeforeLogLineRead(false, logLineEventArgs);
+        ParseRawLogLineCore(false, parsedLogTime, logLine);
+    }
+
+    public void ParseRawLogLine(bool isImport, DateTime detectedTime, string logLine)
+    {
+        if (WriteLogFile && !DisableWritingPvpLogFile)
+            LogQueue.Enqueue(logLine);
+        if (BeforeLogLineRead == null)
+            return;
+        ParseRawLogLineCore(isImport, detectedTime, logLine);
+    }
+
+    private void ParseRawLogLineCore(bool isImport, DateTime detectedTime, string logLine)
+    {
+        LastKnownTime = detectedTime;
+        var logLineEventArgs = new LogLineEventArgs(logLine, 0, detectedTime, CurrentZone, inCombat, "Plugin");
+        BeforeLogLineRead(isImport, logLineEventArgs);
         if (OnLogLineRead == null)
             return;
         var logLineEventArgs2 = new LogLineEventArgs(logLineEventArgs.logLine, logLineEventArgs.detectedType,
-                                                     parsedLogTime, CurrentZone, inCombat, "Plugin");
-        OnLogLineRead(false, logLineEventArgs2);
+                                                     detectedTime, CurrentZone, inCombat, "Plugin");
+        OnLogLineRead(isImport, logLineEventArgs2);
     }
 
 
