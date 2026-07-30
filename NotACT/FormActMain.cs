@@ -202,7 +202,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     public delegate void TextToSpeechDelegate(string text);
 
-    public event TextToSpeechDelegate TextToSpeech;
+    public event TextToSpeechDelegate? TextToSpeech;
 
 
     public void WriteExceptionLog(Exception ex, string MoreInfo) => 
@@ -228,7 +228,16 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     }
 
 
-    public void TTS(string message) => TextToSpeech(message);
+    public void TTS(string message)
+    {
+        if (PlayTtsMethod is not null)
+        {
+            PlayTtsMethod(message);
+            return;
+        }
+
+        TextToSpeech?.Invoke(message);
+    }
 
     public void ChangeZone(string ZoneName)
     {

@@ -19,12 +19,12 @@ public class FetchDependencies
         HttpClient = httpClient;
     }
 
-    public void GetFfxivPlugin()
+    public void GetFfxivPlugin(bool forceUpdate = false)
     {
         var pluginZipPath = Path.Combine(DependenciesDir, "FFXIV_ACT_Plugin.zip");
         var pluginPath = Path.Combine(DependenciesDir, "FFXIV_ACT_Plugin.dll");
         
-        if (!NeedsUpdate(pluginPath))
+        if (!forceUpdate && !NeedsUpdate(pluginPath))
             return;
         
         if (!File.Exists(pluginZipPath))

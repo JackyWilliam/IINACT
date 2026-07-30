@@ -45,6 +45,62 @@ namespace RainbowMage.OverlayPlugin.EventSources
             }
 
             ActGlobals.oFormActMain.BeforeLogLineRead += LogLineHandler;
+            CacheCurrentGameState();
+        }
+
+        private void CacheCurrentGameState()
+        {
+            if (repository == null)
+                return;
+
+            try
+            {
+                var zoneID = repository.GetCurrentTerritoryID();
+                var zoneName = ActGlobals.oFormActMain.CurrentZone;
+                if (zoneID is > 0 && !string.IsNullOrWhiteSpace(zoneName))
+                {
+                    DispatchAndCacheEvent(CreateChangeZoneEvent(zoneID.Value, zoneName));
+                    Log(
+                        LogLevel.Info,
+                        "Initialized cached ChangeZone from current game state: {0:X} {1}",
+                        zoneID.Value,
+                        zoneName);
+                }
+
+                var charID = repository.GetPlayerID();
+                var charName = repository.GetPlayerName();
+                if (string.IsNullOrWhiteSpace(charName))
+                    charName = ActGlobals.charName;
+                if (charID != 0 && !string.IsNullOrWhiteSpace(charName) &&
+                    !string.Equals(charName, "YOU", StringComparison.OrdinalIgnoreCase))
+                {
+                    DispatchAndCacheEvent(CreateChangePrimaryPlayerEvent(charID, charName));
+                }
+            }
+            catch (Exception e)
+            {
+                Log(LogLevel.Warning, "Failed to initialize cached game state: {0}", e);
+            }
+        }
+
+        internal static JObject CreateChangeZoneEvent(uint zoneID, string zoneName)
+        {
+            return JObject.FromObject(new
+            {
+                type = ChangeZoneEvent,
+                zoneID,
+                zoneName,
+            });
+        }
+
+        internal static JObject CreateChangePrimaryPlayerEvent(uint charID, string charName)
+        {
+            return JObject.FromObject(new
+            {
+                type = ChangePrimaryPlayerEvent,
+                charID,
+                charName,
+            });
         }
 
         private void StopACTCombat()
@@ -97,12 +153,7 @@ namespace RainbowMage.OverlayPlugin.EventSources
                         var zoneID = Convert.ToUInt32(line[2], 16);
                         var zoneName = line[3];
 
-                        DispatchAndCacheEvent(JObject.FromObject(new
-                        {
-                            type = ChangeZoneEvent,
-                            zoneID,
-                            zoneName,
-                        }));
+                        DispatchAndCacheEvent(CreateChangeZoneEvent(zoneID, zoneName));
                         break;
 
                     case LogMessageType.ChangeMap:
@@ -129,12 +180,7 @@ namespace RainbowMage.OverlayPlugin.EventSources
                         var charID = Convert.ToUInt32(line[2], 16);
                         var charName = line[3];
 
-                        DispatchAndCacheEvent(JObject.FromObject(new
-                        {
-                            type = ChangePrimaryPlayerEvent,
-                            charID,
-                            charName,
-                        }));
+                        DispatchAndCacheEvent(CreateChangePrimaryPlayerEvent(charID, charName));
                         break;
 
                     case LogMessageType.Network6D:

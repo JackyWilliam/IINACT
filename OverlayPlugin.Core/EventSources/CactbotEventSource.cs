@@ -37,6 +37,7 @@ public class CactbotEventSource : EventSourceBase
 
     // Held while the |fast_update_timer_| is running.
     private FFXIVProcess ffxiv;
+    private IDalamudGameStateProvider dalamudGameState;
 
     private string language;
     private string pcLocale;
@@ -101,7 +102,9 @@ public class CactbotEventSource : EventSourceBase
         });
         RegisterEventHandler("cactbotSay", (msg) =>
         {
-            ActGlobals.oFormActMain.TTS(msg["text"].ToString());
+            var text = msg["text"]?.ToString() ?? string.Empty;
+            LogInfo("cactbotSay: {0}", text);
+            ActGlobals.oFormActMain.TTS(text);
             return null;
         });
         RegisterEventHandler("cactbotSaveData", (msg) =>
@@ -164,6 +167,48 @@ public class CactbotEventSource : EventSourceBase
     {
         Config = CactbotEventSourceConfig.LoadConfig(config, logger);
         Config.OverlayData ??= new Dictionary<string, JToken>();
+        if (EnsureDefaultAlertOutput(Config.OverlayData))
+        {
+            Config.SaveConfig(config);
+            config.Save();
+            LogInfo("Normalized Cactbot's default raidboss alert output.");
+        }
+    }
+
+    internal static bool EnsureDefaultAlertOutput(Dictionary<string, JToken> overlayData)
+    {
+        var changed = false;
+        if (!overlayData.TryGetValue("options", out var optionsToken) ||
+            optionsToken is not JObject options)
+        {
+            options = new JObject();
+            overlayData["options"] = options;
+            changed = true;
+        }
+
+        if (options["raidboss"] is not JObject raidboss)
+        {
+            raidboss = new JObject();
+            options["raidboss"] = raidboss;
+            changed = true;
+        }
+
+        if (raidboss["DefaultAlertOutput"] is null)
+        {
+            // SpokenAlertsEnabled is a derived runtime field, not a persisted cactbot option.
+            // v0.2.23-v0.2.24 wrote it directly, so migrate that value to the option consumed
+            // by raidboss_config.ts while preserving an explicit false value.
+            var legacySpokenAlerts = raidboss["SpokenAlertsEnabled"]?.Type == JTokenType.Boolean
+                ? raidboss["SpokenAlertsEnabled"]!.Value<bool>()
+                : (bool?)null;
+            raidboss["DefaultAlertOutput"] = legacySpokenAlerts == false
+                ? "textAndSound"
+                : "ttsAndText";
+            changed = true;
+        }
+
+        changed |= raidboss.Remove("SpokenAlertsEnabled");
+        return changed;
     }
 
     public override void SaveConfig(IPluginConfig config)
@@ -221,7 +266,12 @@ public class CactbotEventSource : EventSourceBase
 
         LogInfo("System Locale: {0}", pcLocale ?? "(unknown)");
 
-        switch (language)
+        container.TryResolve(out dalamudGameState);
+        if (dalamudGameState != null)
+        {
+            LogInfo("Using Dalamud player, party, and combat state.");
+        }
+        else switch (language)
         {
             case "cn":
                 this.ffxiv = new FFXIVProcessCn(container);
@@ -312,14 +362,15 @@ public class CactbotEventSource : EventSourceBase
             notifyState = new NotifyState();
         resetNotifyState = false;
 
-        var gameExists = ffxiv.FindProcess();
+        var dalamudSnapshot = dalamudGameState?.Snapshot;
+        var gameExists = dalamudSnapshot?.GameExists ?? ffxiv.FindProcess();
         if (gameExists != notifyState.GameExists)
         {
             notifyState.GameExists = gameExists;
             DispatchToJs(new JSEvents.GameExistsEvent(gameExists));
         }
 
-        var gameActive = ffxiv.IsActive();
+        var gameActive = dalamudSnapshot?.GameActive ?? ffxiv.IsActive();
         if (gameActive != notifyState.GameActive)
         {
             notifyState.GameActive = gameActive;
@@ -334,7 +385,7 @@ public class CactbotEventSource : EventSourceBase
 
         // onInCombatChangedEvent: Fires when entering or leaving combat.
         var inActCombat = ActGlobals.oFormActMain.InCombat;
-        var inGameCombat = ffxiv.GetInGameCombat();
+        var inGameCombat = dalamudSnapshot?.InGameCombat ?? ffxiv.GetInGameCombat();
         if (!notifyState.InActCombat.HasValue || inActCombat != notifyState.InActCombat ||
             !notifyState.InGameCombat.HasValue || inGameCombat != notifyState.InGameCombat)
         {
@@ -352,7 +403,11 @@ public class CactbotEventSource : EventSourceBase
         }
 
         // The |player| can be null, such as during a zone change.
-        var player = ffxiv.GetSelfData();
+        var player = dalamudGameState == null
+            ? ffxiv.GetSelfData()
+            : dalamudSnapshot?.Player == null
+                ? null
+                : ToEntityData(dalamudSnapshot.Player);
 
         // onPlayerDiedEvent: Fires when the player dies. All buffs/debuffs are
         // lost.
@@ -377,7 +432,9 @@ public class CactbotEventSource : EventSourceBase
                 send = true;
             }
 
-            var job = ffxiv.GetJobSpecificData(player.job);
+            var job = dalamudGameState == null
+                ? ffxiv.GetJobSpecificData(player.job)
+                : null;
             if (job != null)
             {
                 if (send || !JToken.DeepEquals(job, notifyState.JobData))
@@ -417,6 +474,27 @@ public class CactbotEventSource : EventSourceBase
         lastImportLogLines = importLogs;
 
         return gameActive ? KFastTimerMilli : KSlowTimerMilli;
+    }
+
+    private static FFXIVProcess.EntityData ToEntityData(DalamudPartyMember player)
+    {
+        return new FFXIVProcess.EntityData
+        {
+            id = player.EntityId,
+            type = FFXIVProcess.EntityType.PC,
+            name = player.Name,
+            job = (FFXIVProcess.EntityJob)player.JobId,
+            level = player.Level,
+            hp = unchecked((int)player.CurrentHp),
+            max_hp = unchecked((int)player.MaxHp),
+            mp = player.CurrentMp,
+            max_mp = player.MaxMp,
+            pos_x = player.PositionX,
+            pos_y = player.PositionY,
+            pos_z = player.PositionZ,
+            rotation = player.Rotation,
+            debug_job = ((FFXIVProcess.EntityJob)player.JobId).ToString(),
+        };
     }
 
     // ILogger implementation.

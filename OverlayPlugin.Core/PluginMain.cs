@@ -210,9 +210,24 @@ namespace RainbowMage.OverlayPlugin
                     _container.Register<IAggroMemory, AggroMemoryManager>();
                     _container.Register<IEnmityMemory, EnmityMemoryManager>();
                     _container.Register<IEnmityHudMemory, EnmityHudMemoryManager>();
-                    _container.Register<IInCombatMemory, InCombatMemoryManager>();
+                    if (_container.TryResolve<IDalamudGameStateProvider>(out var dalamudGameState))
+                    {
+                        _container.Register<IInCombatMemory>(
+                            new DalamudInCombatMemory(dalamudGameState));
+                    }
+                    else
+                    {
+                        _container.Register<IInCombatMemory, InCombatMemoryManager>();
+                    }
                     _container.Register<IAtkStageMemory, AtkStageMemoryManager>();
-                    _container.Register<IPartyMemory, PartyMemoryManager>();
+                    if (dalamudGameState != null)
+                    {
+                        _container.Register<IPartyMemory>(new DalamudPartyMemory(dalamudGameState));
+                    }
+                    else
+                    {
+                        _container.Register<IPartyMemory, PartyMemoryManager>();
+                    }
                     _container.Register<IJobGaugeMemory, JobGaugeMemoryManager>();
 
                     _container.Register(new OverlayPluginLogLines(_container));
