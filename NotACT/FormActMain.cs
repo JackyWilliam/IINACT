@@ -1,10 +1,10 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Media;
 using System.Text.RegularExpressions;
 using Advanced_Combat_Tracker.Resources;
-using Dalamud.Plugin.Services;
 using FFXIV_ACT_Plugin.Logfile;
 
 namespace Advanced_Combat_Tracker;
@@ -16,6 +16,10 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     public List<ActPluginData> ActPlugins { get; } = new();
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public SortedList<string, CustomTrigger> CustomTriggers { get; } =
+        new(StringComparer.Ordinal);
+
     public bool InitActDone => true;
 
     public PlayTtsDelegate? PlayTtsMethod;
@@ -25,9 +29,17 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public ActPluginData? PluginGetSelfData(object plugin)
         => ActPlugins.FirstOrDefault(entry => ReferenceEquals(entry.pluginObj, plugin));
     public delegate DateTime DateTimeLogParser(string logLine);
-    public IPluginLog PluginLog { get; }
+    public IActLogger PluginLog { get; }
 
     private readonly ConcurrentQueue<MasterSwing> afterActionsQueue = new();
+    private readonly ConcurrentDictionary<string, CallbackHealth> callbackHealth = new();
+    private const int LogQueueCapacity = 8192;
+    private const int CombatActionQueueCapacity = 4096;
+    private static readonly TimeSpan SlowPluginCallback = TimeSpan.FromSeconds(2);
+    private int logQueueCount;
+    private int afterActionsQueueCount;
+    private long droppedLogLines;
+    private long droppedCombatActions;
     private Thread afterActionQueueThread;
     public DateTimeLogParser GetDateTimeFromLog;
     private volatile bool inCombat;
@@ -42,9 +54,9 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     internal volatile bool refreshTree;
 
-    public FormActMain(IPluginLog pluginLog)
+    public FormActMain(object pluginLog)
     {
-        PluginLog = pluginLog;
+        PluginLog = pluginLog as IActLogger ?? new ReflectionActLogger(pluginLog);
         InitializeComponent();
         AppDataFolder = new DirectoryInfo(".");
         ActGlobals.ActLocalization.Init();
@@ -74,12 +86,19 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public DirectoryInfo AppDataFolder { get; set; }
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public ConcurrentQueue<string> LogQueue { get; private set; } = new();
+    public long DroppedLogLines => Interlocked.Read(ref droppedLogLines);
+    public long DroppedCombatActions => Interlocked.Read(ref droppedCombatActions);
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string CurrentZone { get; set; }
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public FFXIV_ACT_Plugin.FFXIV_ACT_Plugin FfxivPlugin { get; set; }
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool UseExternalLogSource { get; set; }
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public object OverlayPluginContainer { get; set; }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool InvokeSynchronously { get; set; }
 
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -160,20 +179,53 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public ZoneData ActiveZone { get; set; }
 
-    // Don't run anything on the non existing WinForms UI thread
     public new object? Invoke(Delegate method, object?[]? args)
     {
-        return method.DynamicInvoke(args);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        if (InvokeSynchronously)
+        {
+            return method.DynamicInvoke(args);
+        }
+
+        if (!IsHandleCreated)
+        {
+            throw new InvalidOperationException("The ACT WinForms host handle is not available.");
+        }
+
+        return base.Invoke(method, args);
     }
 
     public new IAsyncResult BeginInvoke(Delegate method, object?[]? args)
     {
-        return Task.FromResult(Invoke(method, args));
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        if (InvokeSynchronously)
+        {
+            try
+            {
+                return Task.FromResult(method.DynamicInvoke(args));
+            }
+            catch (Exception ex)
+            {
+                return Task.FromException<object?>(ex);
+            }
+        }
+
+        if (!IsHandleCreated)
+        {
+            throw new InvalidOperationException("The ACT WinForms host handle is not available.");
+        }
+
+        return base.BeginInvoke(method, args);
     }
 
     public new object? EndInvoke(IAsyncResult result)
     {
-        return ((Task<object?>)result).Result;
+        if (result is Task<object?> task)
+        {
+            return task.GetAwaiter().GetResult();
+        }
+
+        return base.EndInvoke(result);
     }
 
     public new void Invoke(Action method)
@@ -213,7 +265,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public void ParseRawLogLine(string logLine)
     {
         if (WriteLogFile && !DisableWritingPvpLogFile)
-            LogQueue.Enqueue(logLine);
+            EnqueueLogLine(logLine);
         if (BeforeLogLineRead == null || GetDateTimeFromLog == null)
             return;
         var parsedLogTime = GetDateTimeFromLog(logLine);
@@ -223,7 +275,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public void ParseRawLogLine(bool isImport, DateTime detectedTime, string logLine)
     {
         if (WriteLogFile && !DisableWritingPvpLogFile)
-            LogQueue.Enqueue(logLine);
+            EnqueueLogLine(logLine);
         if (BeforeLogLineRead == null)
             return;
         ParseRawLogLineCore(isImport, detectedTime, logLine);
@@ -233,12 +285,18 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     {
         LastKnownTime = detectedTime;
         var logLineEventArgs = new LogLineEventArgs(logLine, 0, detectedTime, CurrentZone, inCombat, "Plugin");
-        BeforeLogLineRead(isImport, logLineEventArgs);
+        InvokeTracked(
+            BeforeLogLineRead,
+            nameof(BeforeLogLineRead),
+            handler => ((LogLineEventDelegate)handler)(isImport, logLineEventArgs));
         if (OnLogLineRead == null)
             return;
         var logLineEventArgs2 = new LogLineEventArgs(logLineEventArgs.logLine, logLineEventArgs.detectedType,
                                                      detectedTime, CurrentZone, inCombat, "Plugin");
-        OnLogLineRead(isImport, logLineEventArgs2);
+        InvokeTracked(
+            OnLogLineRead,
+            nameof(OnLogLineRead),
+            handler => ((LogLineEventDelegate)handler)(isImport, logLineEventArgs2));
     }
 
 
@@ -262,7 +320,7 @@ public partial class FormActMain : Form, ISynchronizeInvoke
         lastZoneRecord = new HistoryRecord(0, LastKnownTime, LastKnownTime.AddDays(1.0), CurrentZone,
                                            ActGlobals.charName);
 
-        if (lastLastRecord == null)
+        if (lastLastRecord == null && !UseExternalLogSource)
         {
             //first run after parser init
             StartLogReaderThread();
@@ -289,7 +347,9 @@ public partial class FormActMain : Form, ISynchronizeInvoke
         if (encounter is null || !encounter.Active)
             return;
 
-        if (activeZone!.PopulateAll && activeZone.Items.Count > 0)
+        if (activeZone!.PopulateAll &&
+            activeZone.Items.Count > 0 &&
+            activeZone.Items[0].Active)
         {
             activeZone.Items[0].EndCombat(Finalize: false);
         }
@@ -297,9 +357,16 @@ public partial class FormActMain : Form, ISynchronizeInvoke
         encounter.EndCombat(Finalize: true);
         if (wasInCombat)
         {
-            OnCombatEnd?.Invoke(false, new CombatToggleEventArgs(false, encounter));
+            var eventArgs = new CombatToggleEventArgs(false, encounter);
+            InvokeTracked(
+                OnCombatEnd,
+                nameof(OnCombatEnd),
+                handler => ((CombatToggleEventDelegate)handler)(false, eventArgs));
         }
-        AfterCombatEnd?.Invoke(encounter);
+        InvokeTracked(
+            AfterCombatEnd,
+            nameof(AfterCombatEnd),
+            handler => ((Action<EncounterData>)handler)(encounter));
     }
 
     public bool SelectiveListGetSelected(string Player)
@@ -353,6 +420,8 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
             // Set the active encounter
             ActiveZone.ActiveEncounter = new EncounterData(ActGlobals.charName, CurrentZone, ActiveZone);
+            ActiveZone.ActiveEncounter.StartTimes.Add(Time);
+            ActiveZone.ActiveEncounter.Active = true;
             ActiveZone.Items.Add(ActiveZone.ActiveEncounter);
             lastSetEncounter = LastKnownTime;
         }
@@ -366,7 +435,14 @@ public partial class FormActMain : Form, ISynchronizeInvoke
                 refreshTree = true;
                 LastHostileTime = Time;
                 inCombat = true;
-                OnCombatStart?.Invoke(false, new CombatToggleEventArgs(false, ActiveZone.ActiveEncounter));
+                var selectiveEventArgs =
+                    new CombatToggleEventArgs(false, ActiveZone.ActiveEncounter);
+                InvokeTracked(
+                    OnCombatStart,
+                    nameof(OnCombatStart),
+                    handler => ((CombatToggleEventDelegate)handler)(
+                        false,
+                        selectiveEventArgs));
                 return true;
             }
 
@@ -378,7 +454,14 @@ public partial class FormActMain : Form, ISynchronizeInvoke
         refreshTree = true;
         LastHostileTime = Time;
         inCombat = true;
-        OnCombatStart?.Invoke(false, new CombatToggleEventArgs(false, ActiveZone.ActiveEncounter));
+        var combatStartEventArgs =
+            new CombatToggleEventArgs(false, ActiveZone.ActiveEncounter);
+        InvokeTracked(
+            OnCombatStart,
+            nameof(OnCombatStart),
+            handler => ((CombatToggleEventDelegate)handler)(
+                false,
+                combatStartEventArgs));
         return true;
     }
 
@@ -408,7 +491,44 @@ public partial class FormActMain : Form, ISynchronizeInvoke
         Action.attacker = string.Intern(combatActionEventArgs.attacker);
         Action.damageType = string.Intern(combatActionEventArgs.theDamageType);
         Action.victim = string.Intern(combatActionEventArgs.victim);
-        afterActionsQueue.Enqueue(Action);
+        EnqueueCombatAction(Action);
+    }
+
+    private void EnqueueLogLine(string line)
+    {
+        LogQueue.Enqueue(line);
+        var count = Interlocked.Increment(ref logQueueCount);
+        while (count > LogQueueCapacity && LogQueue.TryDequeue(out _))
+        {
+            count = Interlocked.Decrement(ref logQueueCount);
+            var dropped = Interlocked.Increment(ref droppedLogLines);
+            LogQueueDropAtPowersOfTwo(
+                dropped,
+                $"[NotACT] Log queue reached {LogQueueCapacity}; dropped oldest line.");
+        }
+    }
+
+    private void EnqueueCombatAction(MasterSwing action)
+    {
+        afterActionsQueue.Enqueue(action);
+        var count = Interlocked.Increment(ref afterActionsQueueCount);
+        while (count > CombatActionQueueCapacity && afterActionsQueue.TryDequeue(out _))
+        {
+            count = Interlocked.Decrement(ref afterActionsQueueCount);
+            var dropped = Interlocked.Increment(ref droppedCombatActions);
+            LogQueueDropAtPowersOfTwo(
+                dropped,
+                $"[NotACT] Combat action queue reached {CombatActionQueueCapacity}; " +
+                "dropped oldest action.");
+        }
+    }
+
+    private void LogQueueDropAtPowersOfTwo(long dropped, string message)
+    {
+        if ((dropped & (dropped - 1)) == 0)
+        {
+            PluginLog.Warning($"{message} Total dropped: {dropped}.");
+        }
     }
 
     private void StartLogWriterThread()
@@ -437,7 +557,10 @@ public partial class FormActMain : Form, ISynchronizeInvoke
                 }
                 
                 while (LogQueue.TryDequeue(out var line))
+                {
+                    Interlocked.Decrement(ref logQueueCount);
                     outputWriter.WriteLine(line);
+                }
 
                 outputWriter.Flush();
                 Thread.Sleep(500);
@@ -511,18 +634,15 @@ public partial class FormActMain : Form, ISynchronizeInvoke
             {
                 while (afterActionsQueue.TryDequeue(out var masterSwing))
                 {
+                    Interlocked.Decrement(ref afterActionsQueueCount);
                     ActiveZone.AddCombatAction(masterSwing);
                     if (AfterCombatAction == null) continue;
 
                     var actionInfo = new CombatActionEventArgs(masterSwing);
-                    try
-                    {
-                        AfterCombatAction(false, actionInfo);
-                    }
-                    catch (Exception ex2)
-                    {
-                        WriteExceptionLog(ex2, "AddCombatAction->AfterCombatAction event\n");
-                    }
+                    InvokeTracked(
+                        AfterCombatAction,
+                        nameof(AfterCombatAction),
+                        handler => ((CombatActionDelegate)handler)(false, actionInfo));
                 }
 
                 Thread.Sleep(2);
@@ -603,8 +723,173 @@ public partial class FormActMain : Form, ISynchronizeInvoke
         }
     }
 
+    public IReadOnlyList<ActCallbackHealthSnapshot> GetCallbackHealth()
+        => callbackHealth
+            .Select(pair => pair.Value.Snapshot(pair.Key))
+            .OrderBy(snapshot => snapshot.PluginId, StringComparer.Ordinal)
+            .ThenBy(snapshot => snapshot.Callback, StringComparer.Ordinal)
+            .ToArray();
+
+    private void InvokeTracked(
+        Delegate? handlers,
+        string eventName,
+        Action<Delegate> invoke)
+    {
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            var pluginId = handler.Method.Module.Assembly.GetName().Name ?? "unknown";
+            var callback =
+                $"{pluginId}:{handler.Method.DeclaringType?.FullName}.{handler.Method.Name}/{eventName}";
+            var health = callbackHealth.GetOrAdd(
+                callback,
+                _ => new CallbackHealth(pluginId, eventName));
+            if (!health.TryStart())
+            {
+                continue;
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            Exception? failure = null;
+            try
+            {
+                invoke(handler);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+                WriteExceptionLog(
+                    ex,
+                    $"ACT plugin callback failed ({callback}); the callback remains isolated in the ACT Host");
+            }
+            finally
+            {
+                stopwatch.Stop();
+                var opened = health.Complete(
+                    stopwatch.Elapsed,
+                    failure,
+                    SlowPluginCallback);
+                if (opened)
+                {
+                    PluginLog.Warning(
+                        $"ACT plugin callback circuit opened ({callback}); " +
+                        "five consecutive exceptions or three consecutive slow calls were observed.");
+                }
+            }
+        }
+    }
+
     internal void Exit()
     {
         pluginActive = false;
     }
+
+    private sealed class CallbackHealth
+    {
+        private readonly object sync = new();
+        private readonly string pluginId;
+        private readonly string eventName;
+        private long completed;
+        private long exceptions;
+        private long timeouts;
+        private int consecutiveExceptions;
+        private int consecutiveTimeouts;
+        private long lastDurationMilliseconds;
+        private DateTimeOffset? activeSince;
+        private bool circuitOpen;
+
+        public CallbackHealth(string pluginId, string eventName)
+        {
+            this.pluginId = pluginId;
+            this.eventName = eventName;
+        }
+
+        public bool TryStart()
+        {
+            lock (sync)
+            {
+                if (circuitOpen)
+                {
+                    return false;
+                }
+
+                activeSince = DateTimeOffset.UtcNow;
+                return true;
+            }
+        }
+
+        public bool Complete(
+            TimeSpan elapsed,
+            Exception? failure,
+            TimeSpan slowThreshold)
+        {
+            lock (sync)
+            {
+                completed++;
+                lastDurationMilliseconds = (long)elapsed.TotalMilliseconds;
+                activeSince = null;
+                if (failure is null)
+                {
+                    consecutiveExceptions = 0;
+                }
+                else
+                {
+                    exceptions++;
+                    consecutiveExceptions++;
+                }
+
+                if (elapsed >= slowThreshold)
+                {
+                    timeouts++;
+                    consecutiveTimeouts++;
+                }
+                else
+                {
+                    consecutiveTimeouts = 0;
+                }
+
+                var wasOpen = circuitOpen;
+                circuitOpen =
+                    consecutiveExceptions >= 5 ||
+                    consecutiveTimeouts >= 3;
+                return circuitOpen && !wasOpen;
+            }
+        }
+
+        public ActCallbackHealthSnapshot Snapshot(string callback)
+        {
+            lock (sync)
+            {
+                return new ActCallbackHealthSnapshot(
+                    pluginId,
+                    callback,
+                    eventName,
+                    completed,
+                    exceptions,
+                    timeouts,
+                    consecutiveExceptions,
+                    consecutiveTimeouts,
+                    lastDurationMilliseconds,
+                    activeSince,
+                    circuitOpen);
+            }
+        }
+    }
 }
+
+public sealed record ActCallbackHealthSnapshot(
+    string PluginId,
+    string Callback,
+    string EventName,
+    long Completed,
+    long Exceptions,
+    long Timeouts,
+    int ConsecutiveExceptions,
+    int ConsecutiveTimeouts,
+    long LastDurationMilliseconds,
+    DateTimeOffset? ActiveSince,
+    bool CircuitOpen);

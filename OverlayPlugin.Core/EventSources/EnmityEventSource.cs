@@ -44,7 +44,10 @@ namespace RainbowMage.OverlayPlugin.EventSources
         };
 
         private const int endEncounterOutOfCombatDelayMs = 5000;
-        CancellationTokenSource endEncounterToken;
+        private readonly object endEncounterSync = new object();
+        private CancellationTokenSource endEncounterToken;
+        private LineInCombat lineInCombat;
+        private bool acceptEndEncounterTasks;
 
         public BuiltinEventConfig Config { get; set; }
 
@@ -68,7 +71,7 @@ namespace RainbowMage.OverlayPlugin.EventSources
             });
             RegisterCachedEventType(InCombatEvent);
 
-            var lineInCombat = container.Resolve<LineInCombat>();
+            lineInCombat = container.Resolve<LineInCombat>();
             lineInCombat.OnInCombatChanged += OnInCombatChanged;
 
             EnmityTick += UpdateEnmity;
@@ -77,7 +80,31 @@ namespace RainbowMage.OverlayPlugin.EventSources
 
         public override void Start()
         {
+            lock (endEncounterSync)
+            {
+                acceptEndEncounterTasks = true;
+            }
+
             timer.Change(0, Config.EnmityIntervalMs);
+        }
+
+        public override void Stop()
+        {
+            CancelPendingEndEncounter(disableScheduling: true);
+            base.Stop();
+        }
+
+        public override void Dispose()
+        {
+            CancelPendingEndEncounter(disableScheduling: true);
+            if (lineInCombat != null)
+            {
+                lineInCombat.OnInCombatChanged -= OnInCombatChanged;
+                EnmityTick -= lineInCombat.Update;
+            }
+
+            EnmityTick -= UpdateEnmity;
+            base.Dispose();
         }
 
         public override void LoadConfig(IPluginConfig cfg)
@@ -113,22 +140,79 @@ namespace RainbowMage.OverlayPlugin.EventSources
             // If we've transitioned to being out of combat, start a delayed task to end the ACT encounter.
             if (Config.EndEncounterOutOfCombat && !inGameCombat)
             {
-                endEncounterToken = new CancellationTokenSource();
-                Task.Run(async delegate
-                {
-                    await Task.Delay(endEncounterOutOfCombatDelayMs, endEncounterToken.Token);
-                    ActGlobals.oFormActMain.Invoke((Action)(() =>
-                    {
-                        ActGlobals.oFormActMain.EndCombat(true);
-                    }));
-                });
+                ScheduleEndEncounter();
             }
             // If combat starts again, cancel any outstanding tasks to stop the ACT encounter.
             // If the task has already run, this will not do anything.
-            if (inGameCombat && endEncounterToken != null)
+            if (inGameCombat)
             {
-                endEncounterToken.Cancel();
+                CancelPendingEndEncounter();
+            }
+        }
+
+        private void ScheduleEndEncounter()
+        {
+            var pending = new CancellationTokenSource();
+            lock (endEncounterSync)
+            {
+                if (!acceptEndEncounterTasks)
+                {
+                    pending.Dispose();
+                    return;
+                }
+
+                var previous = endEncounterToken;
+                endEncounterToken = pending;
+                previous?.Cancel();
+            }
+
+            _ = EndEncounterAfterDelayAsync(pending);
+        }
+
+        private async Task EndEncounterAfterDelayAsync(CancellationTokenSource pending)
+        {
+            try
+            {
+                await Task.Delay(endEncounterOutOfCombatDelayMs, pending.Token);
+                var actMain = ActGlobals.oFormActMain;
+                actMain.Invoke((Action)(() =>
+                {
+                    actMain.EndCombat(true);
+                }));
+            }
+            catch (OperationCanceledException) when (pending.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                logger.Log(LogLevel.Warning, "Delayed ACT encounter end failed: {0}", ex);
+            }
+            finally
+            {
+                lock (endEncounterSync)
+                {
+                    if (ReferenceEquals(endEncounterToken, pending))
+                    {
+                        endEncounterToken = null;
+                    }
+                }
+
+                pending.Dispose();
+            }
+        }
+
+        private void CancelPendingEndEncounter(bool disableScheduling = false)
+        {
+            lock (endEncounterSync)
+            {
+                if (disableScheduling)
+                {
+                    acceptEndEncounterTasks = false;
+                }
+
+                var pending = endEncounterToken;
                 endEncounterToken = null;
+                pending?.Cancel();
             }
         }
 
