@@ -16,6 +16,10 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     public List<ActPluginData> ActPlugins { get; } = new();
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public SortedList<string, CustomTrigger> CustomTriggers { get; } =
+        new(StringComparer.Ordinal);
+
     public bool InitActDone => true;
 
     public PlayTtsDelegate? PlayTtsMethod;
@@ -92,6 +96,9 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public bool UseExternalLogSource { get; set; }
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public object OverlayPluginContainer { get; set; }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool InvokeSynchronously { get; set; }
 
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -175,6 +182,11 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public new object? Invoke(Delegate method, object?[]? args)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
+        if (InvokeSynchronously)
+        {
+            return method.DynamicInvoke(args);
+        }
+
         if (!IsHandleCreated)
         {
             throw new InvalidOperationException("The ACT WinForms host handle is not available.");
@@ -186,6 +198,18 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     public new IAsyncResult BeginInvoke(Delegate method, object?[]? args)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
+        if (InvokeSynchronously)
+        {
+            try
+            {
+                return Task.FromResult(method.DynamicInvoke(args));
+            }
+            catch (Exception ex)
+            {
+                return Task.FromException<object?>(ex);
+            }
+        }
+
         if (!IsHandleCreated)
         {
             throw new InvalidOperationException("The ACT WinForms host handle is not available.");
@@ -196,6 +220,11 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     public new object? EndInvoke(IAsyncResult result)
     {
+        if (result is Task<object?> task)
+        {
+            return task.GetAwaiter().GetResult();
+        }
+
         return base.EndInvoke(result);
     }
 
