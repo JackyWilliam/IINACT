@@ -45,12 +45,27 @@ public static partial class ActGlobals
     
     public static void Dispose()
     {
-        oFormActMain.Exit();
-        oFormActMain.Dispose();
-        oFormActMain = null!;
-        _trans = null!;
-        selectiveList.Clear();
-        selectiveList = null!;
-        ActionDataLock = null!;
+        var form = Interlocked.Exchange(ref oFormActMain, null!);
+        try
+        {
+            if (form is not null)
+            {
+                try
+                {
+                    form.Exit();
+                }
+                finally
+                {
+                    form.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            _trans = null!;
+            var selections = Interlocked.Exchange(ref selectiveList, null!);
+            selections?.Clear();
+            ActionDataLock = null!;
+        }
     }
 }
