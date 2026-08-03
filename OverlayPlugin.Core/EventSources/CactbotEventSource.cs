@@ -171,7 +171,7 @@ public class CactbotEventSource : EventSourceBase
         {
             Config.SaveConfig(config);
             config.Save();
-            LogInfo("Normalized Cactbot's default raidboss alert output.");
+            LogInfo("Normalized Cactbot's default raidboss output and player label.");
         }
     }
 
@@ -204,6 +204,12 @@ public class CactbotEventSource : EventSourceBase
             raidboss["DefaultAlertOutput"] = legacySpokenAlerts == false
                 ? "textAndSound"
                 : "ttsAndText";
+            changed = true;
+        }
+
+        if (raidboss["DefaultPlayerLabel"] is null)
+        {
+            raidboss["DefaultPlayerLabel"] = "jobFull";
             changed = true;
         }
 
