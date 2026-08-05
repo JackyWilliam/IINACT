@@ -22,16 +22,26 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors
                 // Z as elevation and Y as north-south.
                 float y = FFXIVRepository.ConvertUInt16Coordinate(Get<UInt16>("PosZ"));
                 float z = FFXIVRepository.ConvertUInt16Coordinate(Get<UInt16>("PosY"));
-                // for rotation, the packet uses '0' as north, and each increment is 1/65536 of a CCW turn, while
-                // in-game uses 0=south, pi/2=west, +/-pi=north
-                // Machina thinks this is a float but that appears to be incorrect, so we have to reinterpret as
-                // a UInt16
-                double h = FFXIVRepository.ConvertHeading(Get<UInt16>("Rotation"));
+                // Global packets encode rotation as UInt16, while CN/KR/TW Machina
+                // packet structs expose the already-normalized in-game radians as Single.
+                // Reading every region as UInt16 throws for every CN ActorCast packet and
+                // silently drops the 0x107/263 ActorCastExtra log line.
+                var rotation = packetType.GetField("Rotation")?.GetValue(packetValue)
+                    ?? throw new InvalidOperationException("ActorCast packet has no Rotation field");
+                double h = ConvertRotation(rotation);
 
                 return string.Format(CultureInfo.InvariantCulture,
                     "{0:X8}|{1:X4}|{2:F3}|{3:F3}|{4:F3}|{5:F3}",
                     ActorID, abilityId, x, y, z, h);
             }
+
+            internal static double ConvertRotation(object rotation) => rotation switch
+            {
+                UInt16 encoded => FFXIVRepository.ConvertHeading(encoded),
+                Single radians => radians,
+                _ => throw new InvalidOperationException(
+                    $"Unsupported ActorCast Rotation field type {rotation.GetType().FullName}"),
+            };
         }
         public LineActorCastExtra(TinyIoCContainer container)
             : base(container, LogFileLineID, LogLineName, MachinaPacketName) { }
