@@ -3,6 +3,7 @@ using Newtonsoft.Json.Linq;
 using RainbowMage.OverlayPlugin.MemoryProcessors;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -20,6 +21,8 @@ public class CactbotEventSource : EventSourceBase
     private const int KUberSlowTimerMilli = 3000;
 
     private readonly SemaphoreSlim logLinesSemaphore = new(1);
+    private readonly CactbotTtsDuplicateGuard ttsDuplicateGuard = new(
+        TimeSpan.FromMilliseconds(500));
 
     // Not thread-safe, as OnLogLineRead may happen at any time. Use |log_lines_semaphore_| to access it.
     private List<string> logLines = new(40);
@@ -104,6 +107,11 @@ public class CactbotEventSource : EventSourceBase
         {
             var text = msg["text"]?.ToString() ?? string.Empty;
             LogInfo("cactbotSay: {0}", text);
+            if (!ttsDuplicateGuard.TryAccept(text, Stopwatch.GetTimestamp()))
+            {
+                LogInfo("Suppressed duplicate cactbotSay from another overlay window: {0}", text);
+                return null;
+            }
             ActGlobals.oFormActMain.TTS(text);
             return null;
         });
@@ -838,4 +846,40 @@ public class CactbotEventSource : EventSourceBase
     }
 
     private NotifyState notifyState = new();
+}
+
+internal sealed class CactbotTtsDuplicateGuard
+{
+    private readonly object sync = new();
+    private readonly long duplicateWindowTicks;
+    private string lastText = string.Empty;
+    private long lastTimestamp;
+    private bool hasLastText;
+
+    public CactbotTtsDuplicateGuard(TimeSpan duplicateWindow)
+    {
+        duplicateWindowTicks = Math.Max(
+            0,
+            (long)(duplicateWindow.TotalSeconds * Stopwatch.Frequency));
+    }
+
+    public bool TryAccept(string text, long timestamp)
+    {
+        lock (sync)
+        {
+            var elapsed = timestamp - lastTimestamp;
+            if (hasLastText &&
+                string.Equals(text, lastText, StringComparison.Ordinal) &&
+                elapsed is >= 0 &&
+                elapsed <= duplicateWindowTicks)
+            {
+                return false;
+            }
+
+            lastText = text;
+            lastTimestamp = timestamp;
+            hasLastText = true;
+            return true;
+        }
+    }
 }
