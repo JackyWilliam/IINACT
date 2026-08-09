@@ -15,6 +15,7 @@ public unsafe class ZoneDownHookManager : IDisposable
 {
 	private const string GenericDownSignature = "E8 ?? ?? ?? ?? 4C 8B 4F 10 8B 47 1C 45";
     private const string OpcodeKeyTableSignature = "?? ?? ?? 2B C8 ?? 8B ?? 8A ?? ?? ?? ?? 41 81";
+    private const string Chinese755HotfixGameVersion = "2026.08.05.0000.0000";
     private readonly int[] opcodeKeyTable;
     private readonly byte[] keys = new byte[3];
     
@@ -37,44 +38,56 @@ public unsafe class ZoneDownHookManager : IDisposable
         var multiScanner = new MultiSigScanner();
         var moduleBase = multiScanner.Module.BaseAddress;
         
-        var version = GetRunningGameVersion();
-        var isGlobal = Machina.FFXIV.Headers.Opcodes.OpcodeManager.Instance.GameRegion == Machina.FFXIV.GameRegion.Global;
-        if (isGlobal && VersionConstants.Constants.ContainsKey(version))
+        var version = GetRunningGameVersion().Trim();
+        var region = Machina.FFXIV.Headers.Opcodes.OpcodeManager.Instance.GameRegion;
+        if (CanUseBundledVersionConstants(region, version))
         {
+            Plugin.Log.Information(
+                "[ZoneDownHookManager] Using bundled Unscrambler constants for {Version} ({Region})",
+                version,
+                region);
             versionConstants = VersionConstants.ForGameVersion(version);
             unscrambler = UnscramblerFactory.ForGameVersion(version);
         }
         else
         {
-            Plugin.Log.Warning("[ZoneDownHookManager] Creating fallback Unscrambler constants dynamically");
-            var onReceivePacketAddress = PacketDispatcher.GetOnReceivePacketAddress();
-            Plugin.Log.Debug($"[ZoneDownHookManager] GetOnReceivePacketAddress: {onReceivePacketAddress:X}");
-            var opcodeKeyTableIns = MultiSigScanner.Scan(onReceivePacketAddress, 0x1000, OpcodeKeyTableSignature);
-            var bytes = new byte[13];
-            Marshal.Copy(opcodeKeyTableIns, bytes, 0, 13);
-            var opcodeKeyTableOffset = BitConverter.ToUInt32(bytes, 9);
-            var opcodeKeyTableAddress = moduleBase + (nint)opcodeKeyTableOffset;
-            var searchRange = 0x1000;
-            var memory = new byte[searchRange];
-            Marshal.Copy(opcodeKeyTableAddress, memory, 0, searchRange);
-            var moduleSize = multiScanner.Module.ModuleMemorySize;
-            var opcodeKeyTableSize = 0;
-            while (!IsModulePointer(memory, opcodeKeyTableSize, moduleBase, moduleSize))
+            var (opcodeKeyTableOffset, opcodeKeyTableSize) = FindOpcodeKeyTable(
+                moduleBase,
+                multiScanner.Module.ModuleMemorySize);
+
+            if (CanUseChineseRuntimeVersionConstants(region, version, opcodeKeyTableSize))
             {
-                opcodeKeyTableSize += 4;
-                if (opcodeKeyTableSize > searchRange)
-                    throw new Exception("Opcode key table size is too large");
+                versionConstants = GetChineseRuntimeVersionConstant(
+                    version,
+                    opcodeKeyTableOffset,
+                    opcodeKeyTableSize);
+                unscrambler = new Unscrambler73();
+                unscrambler.Initialize(versionConstants);
+                Plugin.Log.Information(
+                    "[ZoneDownHookManager] Using Unscrambler 7.55h1 opcodes with the runtime-discovered " +
+                    "Chinese key table for {Version}: offset {Offset:X}, size {Size}",
+                    version,
+                    opcodeKeyTableOffset,
+                    opcodeKeyTableSize);
             }
-            if (memory[opcodeKeyTableSize - 1] == 0 && memory[opcodeKeyTableSize - 2] == 0 && memory[opcodeKeyTableSize - 3] == 0 && memory[opcodeKeyTableSize - 4] == 0)
+            else
             {
-                Plugin.Log.Debug("Uneven padded length for opcode key table");
-                opcodeKeyTableSize -= 4;
+                Plugin.Log.Warning(
+                    "[ZoneDownHookManager] No ranking-safe Unscrambler profile for {Version} ({Region}); " +
+                    "using runtime fallback constants. Combat parsing may continue, but FF Logs rankings are not guaranteed.",
+                    version,
+                    region);
+                versionConstants = GetFallbackVersionConstant(opcodeKeyTableOffset, opcodeKeyTableSize);
+                unscrambler = new Unscrambler73();
+                unscrambler.Initialize(versionConstants);
+                notificationManager.AddNotification(new Notification
+                {
+                    Title = "ACT 网络兼容性警告",
+                    Content = $"当前游戏版本 {version} 没有经过验证的解混淆配置；已启用兼容兜底。" +
+                              "解析会继续尝试，但数据完整性及新日志的 FF Logs 排名有效性无法保证。",
+                    Type = NotificationType.Warning,
+                });
             }
-            Plugin.Log.Debug(
-                $"[ZoneDownHookManager] opcodeKeyTableOffset {opcodeKeyTableOffset:X}, opcodeKeyTableSize {opcodeKeyTableSize:X}");
-            versionConstants = GetFallbackVersionConstant(opcodeKeyTableOffset, opcodeKeyTableSize);
-            unscrambler = new Unscrambler73();
-            unscrambler.Initialize(versionConstants);
         }
         
         var rawOpcodeKeyTable = new byte[versionConstants.OpcodeKeyTableSize];
@@ -87,7 +100,89 @@ public unsafe class ZoneDownHookManager : IDisposable
         var rxPtrs = multiScanner.ScanText(GenericDownSignature, 3);
 		zoneDownHook = hooks.HookFromAddress<DownPrototype>(rxPtrs[2], ZoneDownDetour);
 
-		Enable();
+        Enable();
+    }
+
+    private static bool CanUseBundledVersionConstants(
+        Machina.FFXIV.GameRegion region,
+        string version)
+    {
+        return region == Machina.FFXIV.GameRegion.Global &&
+               VersionConstants.Constants.ContainsKey(version);
+    }
+
+    private static bool CanUseChineseRuntimeVersionConstants(
+        Machina.FFXIV.GameRegion region,
+        string version,
+        int opcodeKeyTableSize)
+    {
+        return region == Machina.FFXIV.GameRegion.Chinese &&
+               version == Chinese755HotfixGameVersion &&
+               VersionConstants.Constants.TryGetValue(version, out var bundled) &&
+               bundled.OpcodeKeyTableSize == opcodeKeyTableSize &&
+               bundled.ObfuscatedOpcodes.Count == 19 &&
+               bundled.ObfuscatedOpcodes.Values.All(opcode => opcode != 0);
+    }
+
+    private static VersionConstants GetChineseRuntimeVersionConstant(
+        string version,
+        uint opcodeKeyTableOffset,
+        int opcodeKeyTableSize)
+    {
+        var bundled = VersionConstants.ForGameVersion(version);
+        // The Chinese executable shares the 7.55h1 packet opcodes but not the Global table RVAs.
+        // ZoneDown only needs those opcodes and the key table discovered from the running process.
+        return new VersionConstants
+        {
+            GameVersion = version,
+            OpcodeKeyTableOffset = opcodeKeyTableOffset,
+            OpcodeKeyTableSize = opcodeKeyTableSize,
+            ObfuscatedOpcodes = new Dictionary<string, int>(bundled.ObfuscatedOpcodes, StringComparer.Ordinal),
+        };
+    }
+
+    private static (uint Offset, int Size) FindOpcodeKeyTable(nint moduleBase, long moduleSize)
+    {
+        var onReceivePacketAddress = PacketDispatcher.GetOnReceivePacketAddress();
+        Plugin.Log.Debug($"[ZoneDownHookManager] GetOnReceivePacketAddress: {onReceivePacketAddress:X}");
+        var opcodeKeyTableIns = MultiSigScanner.Scan(
+            onReceivePacketAddress,
+            0x1000,
+            OpcodeKeyTableSignature);
+        var bytes = new byte[13];
+        Marshal.Copy(opcodeKeyTableIns, bytes, 0, bytes.Length);
+        var opcodeKeyTableOffset = BitConverter.ToUInt32(bytes, 9);
+        var opcodeKeyTableAddress = moduleBase + (nint)opcodeKeyTableOffset;
+        const int searchRange = 0x1000;
+        var memory = new byte[searchRange];
+        Marshal.Copy(opcodeKeyTableAddress, memory, 0, searchRange);
+
+        var opcodeKeyTableSize = 0;
+        while (!IsModulePointer(memory, opcodeKeyTableSize, moduleBase, moduleSize))
+        {
+            opcodeKeyTableSize += 4;
+            if (opcodeKeyTableSize > searchRange)
+                throw new Exception("Opcode key table size is too large");
+        }
+
+        if (opcodeKeyTableSize >= 4 &&
+            memory[opcodeKeyTableSize - 1] == 0 &&
+            memory[opcodeKeyTableSize - 2] == 0 &&
+            memory[opcodeKeyTableSize - 3] == 0 &&
+            memory[opcodeKeyTableSize - 4] == 0)
+        {
+            Plugin.Log.Debug("Uneven padded length for opcode key table");
+            opcodeKeyTableSize -= 4;
+        }
+
+        if (opcodeKeyTableSize <= 0 || opcodeKeyTableSize % sizeof(int) != 0)
+            throw new Exception($"Invalid opcode key table size: {opcodeKeyTableSize}");
+
+        Plugin.Log.Debug(
+            "[ZoneDownHookManager] opcodeKeyTableOffset {Offset:X}, opcodeKeyTableSize {Size:X}",
+            opcodeKeyTableOffset,
+            opcodeKeyTableSize);
+        return (opcodeKeyTableOffset, opcodeKeyTableSize);
     }
     
     private static bool IsModulePointer(ReadOnlySpan<byte> memory, int offset, nint moduleBase, long moduleSize)
