@@ -56,6 +56,10 @@ public class FetchDependencies
     private bool NeedsUpdate(string dllPath)
     {
         if (!File.Exists(dllPath)) return true;
+        var logfilePath = Path.Combine(DependenciesDir, "FFXIV_ACT_Plugin.Logfile.dll");
+        if (!File.Exists(logfilePath) || !LogFormatIdentity.Matches(logfilePath, PluginVersion))
+            return true;
+
         try
         {
             using var plugin = new TargetAssembly(dllPath);

@@ -77,7 +77,7 @@ internal class Patcher
             while (ilProcessor.Body.Instructions.First().OpCode != OpCodes.Ldstr)
                 ilProcessor.RemoveAt(0);
             ilProcessor.Replace(
-                0, Instruction.Create(OpCodes.Ldstr, $"This is IINACT {PluginVersion} (API {ApiVersion.IinactApiVersion}) based on FFXIV_ACT_Plugin {{0}}"));
+                0, Instruction.Create(OpCodes.Ldstr, LogFormatIdentity.ExpectedTemplate(PluginVersion)));
             ilProcessor.Replace(1, Instruction.Create(OpCodes.Ldc_I4_1));
             var stelemIndex = Array.FindIndex(ilProcessor.Body.Instructions.ToArray(),
                                               code => code.OpCode == OpCodes.Stelem_Ref);
