@@ -28,6 +28,10 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     public ActPluginData? PluginGetSelfData(object plugin)
         => ActPlugins.FirstOrDefault(entry => ReferenceEquals(entry.pluginObj, plugin));
+
+    public ActPluginData? PluginGetSelfData(IActPluginV1 plugin)
+        => PluginGetSelfData((object)plugin);
+
     public delegate DateTime DateTimeLogParser(string logLine);
     public IActLogger PluginLog { get; }
 
