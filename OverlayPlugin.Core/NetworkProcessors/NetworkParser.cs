@@ -21,7 +21,7 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors
 
         private MachinaRegionalizedPacketHelper<ActorControlPacket> actorControlPacketHelper;
 
-        private static FFXIVRepository ffxiv;
+        private readonly FFXIVRepository ffxiv;
         private GameRegion? currentRegion;
 
         private const string machinaPacketName = "ActorControl";
@@ -30,7 +30,9 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors
         {
             var logger = container.Resolve<ILogger>();
 
-            ffxiv = ffxiv ?? container.Resolve<FFXIVRepository>();
+            // OverlayPlugin can restart without unloading this assembly, so the parser must
+            // subscribe through the repository owned by its current container instance.
+            ffxiv = container.Resolve<FFXIVRepository>();
             ffxiv.RegisterNetworkParser(Parse);
             ffxiv.RegisterProcessChangedHandler(ProcessChanged);
 

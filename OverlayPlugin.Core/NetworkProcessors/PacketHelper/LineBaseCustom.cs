@@ -15,7 +15,7 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors.PacketHelper
         where HeaderStruct_KR : struct, IHeaderStruct
         where PacketStruct_KR : struct, IPacketStruct
     {
-        protected static FFXIVRepository ffxiv;
+        protected readonly FFXIVRepository ffxiv;
 
         protected readonly Func<string, DateTime, bool> logWriter;
         protected readonly RegionalizedPacketHelper<
@@ -26,7 +26,9 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors.PacketHelper
 
         protected LineBaseCustom(TinyIoCContainer container, uint logFileLineID, string logLineName, string opcodeName)
         {
-            ffxiv = ffxiv ?? container.Resolve<FFXIVRepository>();
+            // Reinitialization can reuse the assembly while replacing the container. Keeping
+            // this binding per instance prevents subscriptions from targeting a disposed parser.
+            ffxiv = container.Resolve<FFXIVRepository>();
             ffxiv.RegisterNetworkParser(MessageReceived);
             ffxiv.RegisterProcessChangedHandler(ProcessChanged);
 
@@ -78,8 +80,10 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors.PacketHelper
             if (line != null)
             {
                 DateTime serverTime = ffxiv.EpochToDateTime(epoch);
-                logWriter(line, serverTime);
+                logWriter(FormatLine(line), serverTime);
             }
         }
+
+        protected virtual string FormatLine(string line) => line;
     }
 }

@@ -7,7 +7,7 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors.PacketHelper
     abstract class LineBaseSubMachina<PacketType>
         where PacketType : MachinaPacketWrapper, new()
     {
-        protected static FFXIVRepository ffxiv;
+        protected readonly FFXIVRepository ffxiv;
 
         protected readonly Func<string, DateTime, bool> logWriter;
         protected MachinaRegionalizedPacketHelper<PacketType> packetHelper;
@@ -15,7 +15,9 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors.PacketHelper
 
         public LineBaseSubMachina(TinyIoCContainer container, uint logFileLineID, string logLineName, string machinaPacketName)
         {
-            ffxiv = ffxiv ?? container.Resolve<FFXIVRepository>();
+            // OverlayPlugin can restart without unloading this assembly. Bind each processor to
+            // its current container so a previous, disposed repository cannot retain subscriptions.
+            ffxiv = container.Resolve<FFXIVRepository>();
             ffxiv.RegisterNetworkParser(MessageReceived);
             ffxiv.RegisterProcessChangedHandler(ProcessChanged);
 
