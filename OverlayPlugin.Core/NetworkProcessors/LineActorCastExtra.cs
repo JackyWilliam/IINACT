@@ -22,10 +22,9 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors
                 // Z as elevation and Y as north-south.
                 float y = FFXIVRepository.ConvertUInt16Coordinate(Get<UInt16>("PosZ"));
                 float z = FFXIVRepository.ConvertUInt16Coordinate(Get<UInt16>("PosY"));
-                // Global packets encode rotation as UInt16, while CN/KR/TW Machina
-                // packet structs expose the already-normalized in-game radians as Single.
-                // Reading every region as UInt16 throws for every CN ActorCast packet and
-                // silently drops the 0x107/263 ActorCastExtra log line.
+                // Global packets expose rotation as UInt16, while CN/KR/TW Machina packet
+                // structs declare the same raw bytes as Single. Read the declared type first
+                // so regional packets do not fail reflection before their bits are decoded.
                 var rotation = packetType.GetField("Rotation")?.GetValue(packetValue)
                     ?? throw new InvalidOperationException("ActorCast packet has no Rotation field");
                 double h = ConvertRotation(rotation);
@@ -38,7 +37,10 @@ namespace RainbowMage.OverlayPlugin.NetworkProcessors
             internal static double ConvertRotation(object rotation) => rotation switch
             {
                 UInt16 encoded => FFXIVRepository.ConvertHeading(encoded),
-                Single radians => radians,
+                // Regional layouts still carry the packet's UInt16 heading in the low bits;
+                // a numeric float conversion would collapse these subnormal values to zero.
+                Single encodedAsSingle => FFXIVRepository.ConvertHeading(
+                    unchecked((UInt16)BitConverter.SingleToInt32Bits(encodedAsSingle))),
                 _ => throw new InvalidOperationException(
                     $"Unsupported ActorCast Rotation field type {rotation.GetType().FullName}"),
             };
