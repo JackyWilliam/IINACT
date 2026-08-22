@@ -16,6 +16,8 @@ public class CactbotEventSource : EventSourceBase
 {
     public CactbotEventSourceConfig Config { get; private set; }
 
+    public event EventHandler RadarOptionsChanged;
+
     private const int KFastTimerMilli = 16;
     private const int KSlowTimerMilli = 300;
     private const int KUberSlowTimerMilli = 3000;
@@ -117,8 +119,17 @@ public class CactbotEventSource : EventSourceBase
         });
         RegisterEventHandler("cactbotSaveData", (msg) =>
         {
-            Config.OverlayData[msg["overlay"].ToString()] = msg["data"];
+            var overlayName = msg["overlay"]?.ToString() ?? string.Empty;
+            var data = msg["data"] ?? JValue.CreateNull();
+            Config.OverlayData.TryGetValue(overlayName, out var previousData);
+            var radarOptionsChanged = HaveRadarOptionsChanged(
+                overlayName,
+                previousData,
+                data);
+            Config.OverlayData[overlayName] = data;
             Config.OnUpdateConfig();
+            if (radarOptionsChanged)
+                RadarOptionsChanged?.Invoke(this, EventArgs.Empty);
             return null;
         });
         RegisterEventHandler("cactbotLoadData", (msg) =>
@@ -144,6 +155,19 @@ public class CactbotEventSource : EventSourceBase
                 ret["data"] = data;
             return ret;
         });
+    }
+
+    internal static bool HaveRadarOptionsChanged(
+        string overlayName,
+        JToken? previousData,
+        JToken nextData)
+    {
+        if (!string.Equals(overlayName, "options", StringComparison.Ordinal))
+            return false;
+
+        // The settings page saves the complete options document. Only Radar owns a
+        // startup-only TTS snapshot, so unrelated option edits must not reload it.
+        return !JToken.DeepEquals(previousData?["radar"], nextData?["radar"]);
     }
 
     private void Log(LogLevel level, string msg)
