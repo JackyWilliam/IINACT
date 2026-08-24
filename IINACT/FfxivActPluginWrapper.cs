@@ -28,6 +28,7 @@ public partial class FfxivActPluginWrapper : IDisposable
 {
     private readonly Configuration configuration;
     private readonly ClientLanguage dalamudClientLanguage;
+    private readonly bool isChineseRegion;
     private readonly IChatGui chatGui;
     private readonly IFramework framework;
     private readonly ICondition condition;
@@ -67,15 +68,18 @@ public partial class FfxivActPluginWrapper : IDisposable
 
     public unsafe FfxivActPluginWrapper(
         Configuration configuration, ClientLanguage dalamudClientLanguage, IChatGui chatGui, IFramework framework,
-        ICondition condition)
+        ICondition condition, bool? chineseRegionOverride = null)
     {
         this.configuration = configuration;
         this.dalamudClientLanguage = dalamudClientLanguage;
+        // Language still controls localized parsing; the optional override changes only
+        // packet/opcode selection for launchers whose automatic signal is unavailable.
+        isChineseRegion = chineseRegionOverride ?? IsChineseClientLanguage(dalamudClientLanguage);
         this.chatGui = chatGui;
         this.framework = framework;
         this.condition = condition;
 
-        ConfigureRegion(dalamudClientLanguage);
+        ConfigureRegion(dalamudClientLanguage, isChineseRegion);
 
         ffxivActPlugin = new FFXIV_ACT_Plugin.FFXIV_ACT_Plugin();
         Plugin.Log.Information($"Initializing FFXIV_ACT_Plugin version {typeof(FFXIV_ACT_Plugin.FFXIV_ACT_Plugin).Assembly.GetName().Version}");
@@ -148,14 +152,16 @@ public partial class FfxivActPluginWrapper : IDisposable
             _ => dalamudClientLanguage.ToString() == "ChineseSimplified" ? Language.Chinese : Language.English
         };
 
-    private bool IsChineseClient
-        => dalamudClientLanguage.ToString() == "ChineseSimplified";
-
-    public static void ConfigureRegion(ClientLanguage clientLanguage)
+    public static void ConfigureRegion(
+        ClientLanguage clientLanguage,
+        bool? chineseRegionOverride = null)
         => MachinaOpcodeManager.Instance.SetRegion(
-            clientLanguage.ToString() == "ChineseSimplified"
+            chineseRegionOverride ?? IsChineseClientLanguage(clientLanguage)
                 ? MachinaGameRegion.Chinese
                 : MachinaGameRegion.Global);
+
+    private static bool IsChineseClientLanguage(ClientLanguage clientLanguage)
+        => clientLanguage.ToString() == "ChineseSimplified";
 
     public void Dispose()
     {
@@ -184,7 +190,7 @@ public partial class FfxivActPluginWrapper : IDisposable
         DataCollectionSettings = new DataCollectionSettingsEventArgs
         {
             LogFileFolder = ActGlobals.oFormActMain.LogFilePath,
-            RegionID = IsChineseClient ? Region.Chinese : Region.Global,
+            RegionID = isChineseRegion ? Region.Chinese : Region.Global,
             ProcessID = Environment.ProcessId
         };
         settingsMediator.DataCollectionSettings = DataCollectionSettings;
