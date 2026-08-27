@@ -34,9 +34,16 @@ internal class OverlayServer : WsServer
 
     protected override void OnError(SocketError error)
     {
+        var isFatalAcceptError = IsFatalAcceptError(error);
+        if (isFatalAcceptError && Interlocked.Exchange(ref fatalAcceptErrorHandled, 1) != 0)
+        {
+            return;
+        }
+
+        // NetCoreServer can report the same dead listener from concurrent callbacks, so claim the fatal path before logging it.
         Logger.Log(LogLevel.Error, $"Overlay WebSocket server caught an error with code {error}");
 
-        if (!IsFatalAcceptError(error) || Interlocked.Exchange(ref fatalAcceptErrorHandled, 1) != 0)
+        if (!isFatalAcceptError)
         {
             return;
         }
