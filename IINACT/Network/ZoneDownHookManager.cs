@@ -13,8 +13,9 @@ namespace IINACT.Network;
 
 public unsafe class ZoneDownHookManager : IDisposable
 {
-	private const string GenericDownSignature = "E8 ?? ?? ?? ?? 4C 8B 4F 10 8B 47 1C 45";
+    private const string GenericDownSignature = "E8 ?? ?? ?? ?? 4C 8B 4F 10 8B 47 1C 45";
     private const string OpcodeKeyTableSignature = "?? ?? ?? 2B C8 ?? 8B ?? 8A ?? ?? ?? ?? 41 81";
+    private const string Global755Hotfix2GameVersion = "2026.08.11.0000.0000";
     private const string Chinese755HotfixGameVersion = "2026.08.05.0000.0000";
     private readonly int[] opcodeKeyTable;
     private readonly byte[] keys = new byte[3];
@@ -55,7 +56,22 @@ public unsafe class ZoneDownHookManager : IDisposable
                 moduleBase,
                 multiScanner.Module.ModuleMemorySize);
 
-            if (CanUseChineseRuntimeVersionConstants(region, version, opcodeKeyTableSize))
+            if (CanUseGlobalRuntimeVersionConstants(region, version, opcodeKeyTableSize))
+            {
+                versionConstants = GetGlobalRuntimeVersionConstant(
+                    version,
+                    opcodeKeyTableOffset,
+                    opcodeKeyTableSize);
+                unscrambler = new Unscrambler73();
+                unscrambler.Initialize(versionConstants);
+                Plugin.Log.Information(
+                    "[ZoneDownHookManager] Using verified Unscrambler 7.55h2 opcodes with the " +
+                    "runtime-discovered Global key table for {Version}: offset {Offset:X}, size {Size}",
+                    version,
+                    opcodeKeyTableOffset,
+                    opcodeKeyTableSize);
+            }
+            else if (CanUseChineseRuntimeVersionConstants(region, version, opcodeKeyTableSize))
             {
                 versionConstants = GetChineseRuntimeVersionConstant(
                     version,
@@ -122,6 +138,53 @@ public unsafe class ZoneDownHookManager : IDisposable
                bundled.OpcodeKeyTableSize == opcodeKeyTableSize &&
                bundled.ObfuscatedOpcodes.Count == 19 &&
                bundled.ObfuscatedOpcodes.Values.All(opcode => opcode != 0);
+    }
+
+    private static bool CanUseGlobalRuntimeVersionConstants(
+        Machina.FFXIV.GameRegion region,
+        string version,
+        int opcodeKeyTableSize)
+    {
+        return region == Machina.FFXIV.GameRegion.Global &&
+               version == Global755Hotfix2GameVersion &&
+               opcodeKeyTableSize == 77 * sizeof(int);
+    }
+
+    private static VersionConstants GetGlobalRuntimeVersionConstant(
+        string version,
+        uint opcodeKeyTableOffset,
+        int opcodeKeyTableSize)
+    {
+        // Unscrambler.XIV 7.55.1 predates the Global h2 package data. These are the exact
+        // official h2 opcodes; only the key-table address is discovered from the live process.
+        return new VersionConstants
+        {
+            GameVersion = version,
+            OpcodeKeyTableOffset = opcodeKeyTableOffset,
+            OpcodeKeyTableSize = opcodeKeyTableSize,
+            ObfuscatedOpcodes = new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["PlayerSpawn"] = 0x32D,
+                ["NpcSpawn"] = 0x0E9,
+                ["NpcSpawn2"] = 0x21C,
+                ["ActionEffect01"] = 0x371,
+                ["ActionEffect08"] = 0x3C8,
+                ["ActionEffect16"] = 0x1AF,
+                ["ActionEffect24"] = 0x35A,
+                ["ActionEffect32"] = 0x3D5,
+                ["StatusEffectList"] = 0x2EC,
+                ["StatusEffectList3"] = 0x263,
+                ["Examine"] = 0x097,
+                ["UpdateGearset"] = 0x173,
+                ["UpdateParty"] = 0x3E4,
+                ["ActorControl"] = 0x096,
+                ["ActorCast"] = 0x136,
+                ["UnknownEffect01"] = 0x33C,
+                ["UnknownEffect16"] = 0x1D8,
+                ["ActionEffect02"] = 0x2F4,
+                ["ActionEffect04"] = 0x3AD,
+            },
+        };
     }
 
     private static VersionConstants GetChineseRuntimeVersionConstant(
