@@ -155,8 +155,8 @@ public unsafe class ZoneDownHookManager : IDisposable
         uint opcodeKeyTableOffset,
         int opcodeKeyTableSize)
     {
-        // Unscrambler.XIV 7.55.1 predates the Global h2 package data. These are the exact
-        // official h2 opcodes; only the key-table address is discovered from the live process.
+        // Keep the exact verified h2 opcodes as a runtime-address fallback. Normally
+        // Unscrambler.XIV 7.55.2 supplies this profile directly.
         return new VersionConstants
         {
             GameVersion = version,
