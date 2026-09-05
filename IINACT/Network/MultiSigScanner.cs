@@ -1,10 +1,10 @@
 ﻿using System.Diagnostics;
 using System.Globalization;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Windows.Win32;
-using Windows.Win32.Foundation;
 using Windows.Win32.Storage.FileSystem;
 using Windows.Win32.System.Memory;
 
@@ -354,7 +354,9 @@ public class MultiSigScanner : IDisposable
     /// </summary>
     public void Dispose()
     {
-        Marshal.FreeHGlobal(moduleCopyPtr);
+        // A failed initialization and its owner's cleanup may both dispose the
+        // scanner. Transfer ownership to this call before freeing the allocation.
+        Marshal.FreeHGlobal(Interlocked.Exchange(ref moduleCopyPtr, nint.Zero));
     }
 
     /// <summary>
@@ -506,7 +508,26 @@ public class MultiSigScanner : IDisposable
 
     private void SetupCopy()
     {
-        var handle = PInvoke.CreateFile(Module.FileName,
+        var copy = CopyModuleImage(Module.FileName, Module.ModuleMemorySize);
+        try
+        {
+            moduleCopyOffset = copy.ToInt64() - Module.BaseAddress.ToInt64();
+            Plugin.Log.Debug($"[MultiSigScanner] Offset is 0x{moduleCopyOffset:X} ({copy.ToInt64()} - {Module.BaseAddress.ToInt64()})");
+            moduleCopyPtr = copy;
+        }
+        catch
+        {
+            Marshal.FreeHGlobal(copy);
+            throw;
+        }
+    }
+
+    internal static unsafe nint CopyModuleImage(string fileName, int moduleSize)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(moduleSize);
+        // CsWin32 returns owning SafeHandles. Closing their raw values would
+        // let finalizers later close unrelated resources that reused those values.
+        using var handle = PInvoke.CreateFile(fileName,
                 GenericRead,
                 FILE_SHARE_MODE.FILE_SHARE_READ, 
                 null,
@@ -516,11 +537,11 @@ public class MultiSigScanner : IDisposable
 
         if (handle.IsInvalid)
         {
-            Plugin.Log.Error($"[MultiSigScanner] Failed to open file handle for {Module.FileName}");
-            return;
+            throw new Win32Exception(Marshal.GetLastPInvokeError(),
+                $"[MultiSigScanner] Failed to open module image: {fileName}");
         }
         
-        var map = PInvoke.CreateFileMapping(handle,
+        using var map = PInvoke.CreateFileMapping(handle,
             null,
             PAGE_PROTECTION_FLAGS.PAGE_READONLY | PAGE_PROTECTION_FLAGS.SEC_IMAGE,
             0,
@@ -529,8 +550,8 @@ public class MultiSigScanner : IDisposable
         
         if (map.IsInvalid)
         {
-            Plugin.Log.Error($"[MultiSigScanner] Failed to create file mapping for {Module.FileName}");
-            return;
+            throw new Win32Exception(Marshal.GetLastPInvokeError(),
+                $"[MultiSigScanner] Failed to create module image mapping: {fileName}");
         }
 
         var view = PInvoke.MapViewOfFile(map,
@@ -539,38 +560,32 @@ public class MultiSigScanner : IDisposable
             0,
             0);
         
-        // .text
-        this.moduleCopyPtr = Marshal.AllocHGlobal(this.Module.ModuleMemorySize);
-        
-        unsafe
+        if (view.Value == null)
         {
-            if (view.Value == null)
-            {
-                Plugin.Log.Error($"[MultiSigScanner] Failed to map view of file for {Module.FileName}");
-                Plugin.Log.Error($"[MultiSigScanner] Marshal.GetLastWin32Error(): {Marshal.GetLastWin32Error()}");
-                Plugin.Log.Error($"[MultiSigScanner] Marshal.GetLastPInvokeError(): {Marshal.GetLastPInvokeError()}");
-                Plugin.Log.Error($"[MultiSigScanner] Marshal.GetLastPInvokeErrorMessage(): {Marshal.GetLastPInvokeErrorMessage()}");
-                return;
-            }
-            
-            Buffer.MemoryCopy(
-                (byte*)view.Value,
-                this.moduleCopyPtr.ToPointer(),
-                this.Module.ModuleMemorySize,
-                this.Module.ModuleMemorySize);
-            Plugin.Log.Debug($"[MultiSigScanner] First 16 bytes of data: {ByteString((byte*)moduleCopyPtr, 0, 16)}");
+            throw new Win32Exception(Marshal.GetLastPInvokeError(),
+                $"[MultiSigScanner] Failed to map module image view: {fileName}");
         }
 
-        this.moduleCopyOffset = this.moduleCopyPtr.ToInt64() - this.Module.BaseAddress.ToInt64();
-        Plugin.Log.Debug($"[MultiSigScanner] Offset is 0x{this.moduleCopyOffset:X} ({moduleCopyPtr.ToInt64()} - {Module.BaseAddress.ToInt64()})");
-        Plugin.Log.Debug("[MultiSigScanner] Unmapping.");
-        unsafe
+        var copy = nint.Zero;
+        try
         {
-            PInvoke.UnmapViewOfFile((MEMORY_MAPPED_VIEW_ADDRESS)view.Value);   
+            copy = Marshal.AllocHGlobal(moduleSize);
+            Buffer.MemoryCopy(
+                (byte*)view.Value,
+                copy.ToPointer(),
+                moduleSize,
+                moduleSize);
+            Plugin.Log.Debug($"[MultiSigScanner] First 16 bytes of data: {ByteString((byte*)copy, 0, Math.Min(16, moduleSize))}");
+            var result = copy;
+            copy = nint.Zero;
+            return result;
         }
-        Plugin.Log.Debug("[MultiSigScanner] Unmapped. Closing handles.");
-        PInvoke.CloseHandle((HANDLE)handle.DangerousGetHandle());
-        PInvoke.CloseHandle((HANDLE)map.DangerousGetHandle());
-        Plugin.Log.Debug("[MultiSigScanner] Handles closed.");
+        finally
+        {
+            // A constructor failure must leave neither a mapped view nor an
+            // unpublished copy behind. Handles close after the view is unmapped.
+            Marshal.FreeHGlobal(copy);
+            PInvoke.UnmapViewOfFile(view);
+        }
     }
 }

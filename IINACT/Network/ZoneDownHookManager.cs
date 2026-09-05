@@ -36,7 +36,9 @@ public unsafe class ZoneDownHookManager : IDisposable
     {
         this.notificationManager = notificationManager;
 		buffer = new SimpleBuffer(1024 * 1024);
-        var multiScanner = new MultiSigScanner();
+        // Scan results are rebased to the live module, so the temporary image
+        // is no longer needed after setup, including a failed hook initialization.
+        using var multiScanner = new MultiSigScanner();
         var moduleBase = multiScanner.Module.BaseAddress;
         
         var version = GetRunningGameVersion().Trim();
