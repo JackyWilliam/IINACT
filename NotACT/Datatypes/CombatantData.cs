@@ -150,24 +150,28 @@ public class CombatantData : IComparable, IEquatable<CombatantData>, IComparable
     {
         get
         {
-            if (deathsCached) return cachedDeaths;
-
-            if (!AllInc.TryGetValue(ActGlobals.Trans["specialAttackTerm-killing"], out var value))
+            lock (ActGlobals.ActionDataLock)
             {
-                if (AllInc.TryGetValue(ActGlobals.Trans["attackTypeTerm-all"], out value))
+                if (deathsCached) return cachedDeaths;
+
+                // Recompute from zero: an ordinary incoming hit invalidates this cache too.
+                // Keeping the previous value double-counted deaths in the fallback bucket.
+                cachedDeaths = 0;
+                if (!AllInc.TryGetValue(ActGlobals.Trans["specialAttackTerm-killing"], out var value))
                 {
-                    foreach (var swing in value.Items)
-                        if (swing.Damage == Dnum.Death)
-                            cachedDeaths++;
+                    if (AllInc.TryGetValue(ActGlobals.Trans["attackTypeTerm-all"], out value))
+                    {
+                        foreach (var swing in value.Items)
+                            if (swing.Damage == Dnum.Death)
+                                cachedDeaths++;
+                    }
                 }
                 else
-                    cachedDeaths = 0;
-            }
-            else
-                cachedDeaths = value.Items.Count;
+                    cachedDeaths = value.Items.Count;
 
-            deathsCached = true;
-            return cachedDeaths;
+                deathsCached = true;
+                return cachedDeaths;
+            }
         }
     }
 

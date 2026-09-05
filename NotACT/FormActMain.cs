@@ -54,7 +54,12 @@ public partial class FormActMain : Form, ISynchronizeInvoke
     private HistoryRecord lastZoneRecord;
     private Thread logReaderThread;
     private Thread logWriterThread;
-    private bool pluginActive = true;
+    private volatile bool pluginActive = true;
+    private object? logWriterLifecycleLock;
+    private object LogWriterLifecycleLock => LazyInitializer.EnsureInitialized(ref logWriterLifecycleLock);
+    private string? activeLogFilePath;
+
+    public string? ActiveLogFilePath => Volatile.Read(ref activeLogFilePath);
 
     internal volatile bool refreshTree;
 
@@ -537,45 +542,64 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     private void StartLogWriterThread()
     {
-        logWriterThread = new Thread(LogWriter)
+        lock (LogWriterLifecycleLock)
         {
-            IsBackground = true,
-            Name = "LogWriterThread",
-            Priority = ThreadPriority.BelowNormal
-        };
-        logWriterThread.Start();
+            if (!pluginActive || logWriterThread?.IsAlive == true) return;
+            logWriterThread = new Thread(LogWriter)
+            {
+                IsBackground = true,
+                Name = "LogWriterThread",
+                Priority = ThreadPriority.BelowNormal
+            };
+            logWriterThread.Start();
+        }
     }
 
     private void LogWriter()
     {
-        try
+        // Retry on this worker, never spawn another worker from a failing or retired session.
+        while (pluginActive)
         {
-            using var stream = new FileStream(LogFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-            using var outputWriter = new StreamWriter(stream);
-            while (pluginActive)
+            try
             {
-                if (!WriteLogFile || DisableWritingPvpLogFile)
+                FileStream stream;
+                lock (LogWriterLifecycleLock)
                 {
-                    Thread.Sleep(2000);
-                    continue;
+                    // Exit and first file creation share admission, so a delayed old worker
+                    // cannot create a new Network file after its parser has stopped.
+                    if (!pluginActive) return;
+                    stream = new FileStream(LogFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                    Volatile.Write(ref activeLogFilePath, stream.Name);
                 }
-                
-                while (LogQueue.TryDequeue(out var line))
+                using (stream)
+                using (var outputWriter = new StreamWriter(stream))
                 {
-                    Interlocked.Decrement(ref logQueueCount);
-                    outputWriter.WriteLine(line);
+                    do
+                    {
+                        if (WriteLogFile && !DisableWritingPvpLogFile)
+                        {
+                            while (LogQueue.TryDequeue(out var line))
+                            {
+                                Interlocked.Decrement(ref logQueueCount);
+                                outputWriter.WriteLine(line);
+                            }
+                            outputWriter.Flush();
+                        }
+                        if (!pluginActive) break;
+                        Thread.Sleep(WriteLogFile && !DisableWritingPvpLogFile ? 500 : 2000);
+                        // A stopped, already-open writer still drains its final accepted queue.
+                    } while (true);
                 }
-
-                outputWriter.Flush();
+            }
+            catch (ObjectDisposedException) { return; }
+            catch (ThreadAbortException) { return; }
+            catch (Exception ex)
+            {
+                if (!pluginActive) return;
+                WriteExceptionLog(ex, "LogWriter failed; retrying the active session");
                 Thread.Sleep(500);
             }
-        }
-        catch (ObjectDisposedException) { }
-        catch (ThreadAbortException) { }
-        catch (Exception ex)
-        {
-            WriteExceptionLog(ex, "StartLogReaderThread failed, restarting thread");
-            StartLogWriterThread();
+            finally { Volatile.Write(ref activeLogFilePath, null); }
         }
     }
 
@@ -639,7 +663,14 @@ public partial class FormActMain : Form, ISynchronizeInvoke
                 while (afterActionsQueue.TryDequeue(out var masterSwing))
                 {
                     Interlocked.Decrement(ref afterActionsQueueCount);
-                    ActiveZone.AddCombatAction(masterSwing);
+                    // Snapshot readers already take this lock. Writers must participate too;
+                    // third-party callbacks stay outside it to avoid lock inversion/re-entrancy.
+                    lock (AfterCombatActionDataLock)
+                    {
+                        // Shutdown may have happened while a snapshot held the lock.
+                        if (!pluginActive) return;
+                        ActiveZone.AddCombatAction(masterSwing);
+                    }
                     if (AfterCombatAction == null) continue;
 
                     var actionInfo = new CombatActionEventArgs(masterSwing);
@@ -789,7 +820,10 @@ public partial class FormActMain : Form, ISynchronizeInvoke
 
     internal void Exit()
     {
-        pluginActive = false;
+        lock (LogWriterLifecycleLock)
+        {
+            pluginActive = false;
+        }
     }
 
     private sealed class CallbackHealth
