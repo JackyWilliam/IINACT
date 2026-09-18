@@ -18,6 +18,7 @@ public unsafe class ZoneDownHookManager : IDisposable
     private const string Global755Hotfix2GameVersion = "2026.08.11.0000.0000";
     private const string Chinese755HotfixGameVersion = "2026.08.05.0000.0000";
     private const string Game756Version = "2026.09.01.0000.0000";
+    private const string Game756HotfixVersion = "2026.09.15.0000.0000";
     private readonly int[] opcodeKeyTable;
     private readonly byte[] keys = new byte[3];
     
@@ -136,7 +137,7 @@ public unsafe class ZoneDownHookManager : IDisposable
         int opcodeKeyTableSize)
     {
         return region == Machina.FFXIV.GameRegion.Chinese &&
-               (version == Chinese755HotfixGameVersion || version == Game756Version) &&
+               (version == Chinese755HotfixGameVersion || version == Game756Version || version == Game756HotfixVersion) &&
                VersionConstants.Constants.TryGetValue(version, out var bundled) &&
                bundled.OpcodeKeyTableSize == opcodeKeyTableSize &&
                bundled.ObfuscatedOpcodes.Count == 19 &&
@@ -196,7 +197,7 @@ public unsafe class ZoneDownHookManager : IDisposable
         int opcodeKeyTableSize)
     {
         var bundled = VersionConstants.ForGameVersion(version);
-        // The verified Chinese 7.55h1/7.56 packet opcodes match Global, but executable RVAs do not.
+        // Verified CN 7.55h1/7.56/7.56h1 opcodes match Global, but executable RVAs do not.
         // ZoneDown only needs those opcodes and the key table discovered from the running process.
         return new VersionConstants
         {
