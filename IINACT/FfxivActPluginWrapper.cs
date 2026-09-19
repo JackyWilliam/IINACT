@@ -210,11 +210,7 @@ public partial class FfxivActPluginWrapper : IDisposable
 
         settingsMediator.ProcessException = OnProcessException;
 
-        var line = logFormat.FormatParseSettings(ParseSettings.DisableDamageShield, ParseSettings.DisableCombinePets,
-                                                 ParseSettings.LanguageID, ParseSettings.ParseFilter,
-                                                 ParseSettings.SimulateIndividualDoTCrits,
-                                                 ParseSettings.ShowRealDoTTicks);
-        logOutput.WriteLine(LogMessageType.Settings, DateTime.MinValue, line);
+        WriteParseSettings();
 
         var line2 = logFormat.FormatMemorySettings(DataCollectionSettings.ProcessID,
                                                    DataCollectionSettings.LogFileFolder,
@@ -228,6 +224,26 @@ public partial class FfxivActPluginWrapper : IDisposable
 
         if (!processManager.Verify())
             throw new InvalidOperationException("Game offsets could not be found");
+    }
+
+    public void SetParseFilterMode(ParseFilterMode mode)
+    {
+        if (!Enum.IsDefined(mode)) mode = ParseFilterMode.None;
+        if (ParseSettings.ParseFilter == mode) return;
+        // ReportCombatData reads this shared object on each event, just as ACT's
+        // settings page does. No parser/network restart is needed for this field.
+        ParseSettings.ParseFilter = mode;
+        configuration.ParseFilterMode = (int)mode;
+        WriteParseSettings();
+    }
+
+    private void WriteParseSettings()
+    {
+        var line = logFormat.FormatParseSettings(ParseSettings.DisableDamageShield, ParseSettings.DisableCombinePets,
+                                                 ParseSettings.LanguageID, ParseSettings.ParseFilter,
+                                                 ParseSettings.SimulateIndividualDoTCrits,
+                                                 ParseSettings.ShowRealDoTTicks);
+        logOutput.WriteLine(LogMessageType.Settings, DateTime.MinValue, line);
     }
 
     private void OnChatMessage(IHandleableChatMessage message)
