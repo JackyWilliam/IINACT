@@ -119,6 +119,7 @@ public class CactbotEventSource : EventSourceBase
         });
         RegisterEventHandler("cactbotSaveData", (msg) =>
         {
+            var previousDirectory = Config.UserConfigFile;
             var overlayName = msg["overlay"]?.ToString() ?? string.Empty;
             var data = msg["data"] ?? JValue.CreateNull();
             Config.OverlayData.TryGetValue(overlayName, out var previousData);
@@ -128,6 +129,11 @@ public class CactbotEventSource : EventSourceBase
                 data);
             Config.OverlayData[overlayName] = data;
             Config.OnUpdateConfig();
+            if (Config.WatchFileChanges && previousDirectory != Config.UserConfigFile)
+            {
+                StopFileWatcher();
+                StartFileWatcher();
+            }
             if (radarOptionsChanged)
                 RadarOptionsChanged?.Invoke(this, EventArgs.Empty);
             return null;
@@ -177,6 +183,9 @@ public class CactbotEventSource : EventSourceBase
 
     private string ChooseDirectory()
     {
+        if (container.TryResolve<ICactbotDirectoryPicker>(out var picker))
+            return picker.ChooseDirectory(Config.UserConfigFile ?? string.Empty);
+
         var fileDialogManager = container.Resolve<FileDialogManager>();
         var semaphore = new SemaphoreSlim(0);
         string chosenFolder = null;
@@ -796,7 +805,9 @@ public class CactbotEventSource : EventSourceBase
     private void StartFileWatcher()
     {
         watchers = new List<FileSystemWatcher>();
-        var paths = new List<string> { Config.UserConfigFile };
+        var paths = new List<string> { string.IsNullOrEmpty(Config.UserConfigFile)
+            ? Path.Combine(container.Resolve<PluginMain>().ConfigPath, "cactbot_user")
+            : Config.UserConfigFile };
 
         foreach (var path in paths)
         {
@@ -807,7 +818,7 @@ public class CactbotEventSource : EventSourceBase
             try
             {
                 // Get canonical url for paths so that Directory.Exists will work properly.
-                watchDir = Path.GetFullPath(Path.GetDirectoryName(new Uri(path).LocalPath)!);
+                watchDir = Path.GetFullPath(new Uri(path).LocalPath);
             }
             catch
             {
@@ -844,6 +855,7 @@ public class CactbotEventSource : EventSourceBase
 
     private void StopFileWatcher()
     {
+        if (watchers == null) return;
         foreach (var watcher in watchers)
         {
             watcher.EnableRaisingEvents = false;
