@@ -13,12 +13,12 @@ namespace IINACT.Network;
 
 public unsafe class ZoneDownHookManager : IDisposable
 {
-    private const string GenericDownSignature = "E8 ?? ?? ?? ?? 4C 8B 4F 10 8B 47 1C 45";
     private const string OpcodeKeyTableSignature = "?? ?? ?? 2B C8 ?? 8B ?? 8A ?? ?? ?? ?? 41 81";
     private const string Global755Hotfix2GameVersion = "2026.08.11.0000.0000";
     private const string Chinese755HotfixGameVersion = "2026.08.05.0000.0000";
     private const string Game756Version = "2026.09.01.0000.0000";
     private const string Game756HotfixVersion = "2026.09.15.0000.0000";
+    private const string Game757Version = "2026.10.06.0000.0000";
     private readonly int[] opcodeKeyTable;
     private readonly byte[] keys = new byte[3];
     
@@ -117,8 +117,8 @@ public unsafe class ZoneDownHookManager : IDisposable
         for (var i = 0; i < rawOpcodeKeyTable.Length; i += 4)
             opcodeKeyTable[i / 4] = BitConverter.ToInt32(rawOpcodeKeyTable, i);
 
-        var rxPtrs = multiScanner.ScanText(GenericDownSignature, 3);
-		zoneDownHook = hooks.HookFromAddress<DownPrototype>(rxPtrs[2], ZoneDownDetour);
+        var zoneDownAddress = ZoneDownSignatureResolver.Resolve(version, multiScanner.ScanText);
+		zoneDownHook = hooks.HookFromAddress<DownPrototype>(zoneDownAddress, ZoneDownDetour);
 
         Enable();
     }
@@ -137,7 +137,8 @@ public unsafe class ZoneDownHookManager : IDisposable
         int opcodeKeyTableSize)
     {
         return region == Machina.FFXIV.GameRegion.Chinese &&
-               (version == Chinese755HotfixGameVersion || version == Game756Version || version == Game756HotfixVersion) &&
+               (version == Chinese755HotfixGameVersion || version == Game756Version ||
+                version == Game756HotfixVersion || version == Game757Version) &&
                VersionConstants.Constants.TryGetValue(version, out var bundled) &&
                bundled.OpcodeKeyTableSize == opcodeKeyTableSize &&
                bundled.ObfuscatedOpcodes.Count == 19 &&
@@ -197,7 +198,7 @@ public unsafe class ZoneDownHookManager : IDisposable
         int opcodeKeyTableSize)
     {
         var bundled = VersionConstants.ForGameVersion(version);
-        // Verified CN 7.55h1/7.56/7.56h1 opcodes match Global, but executable RVAs do not.
+        // Verified CN 7.55h1/7.56/7.56h1/7.57 opcodes match Global, but executable RVAs do not.
         // ZoneDown only needs those opcodes and the key table discovered from the running process.
         return new VersionConstants
         {
