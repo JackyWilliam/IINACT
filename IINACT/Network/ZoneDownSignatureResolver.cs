@@ -2,12 +2,21 @@ namespace IINACT.Network;
 
 internal static class ZoneDownSignatureResolver
 {
+    // Global 7.57h (2026.10.16) keeps the 7.57 receive call sites; upstream IINACT 2.10.3.11
+    // hooks it with the same pattern. Without it the hotfix fell to the pre-7.57 signature
+    // and the parser never started.
+    private static readonly HashSet<string> Patch757Versions =
+    [
+        "2026.10.06.0000.0000",
+        "2026.10.16.0000.0000",
+    ];
+
     internal static nint Resolve(string version, Func<string, int, nint[]> scan)
     {
         // IINACT 2.10.3.10 and Unscrambler's 7.57 capture hook publish different
         // compiler variants of the same receive call sites. Keep both exact patterns;
         // older clients must retain their old signature instead of matching a broad wildcard.
-        string[] signatures = version == "2026.10.06.0000.0000"
+        string[] signatures = Patch757Versions.Contains(version)
             ? ["E8 ?? ?? ?? ?? 4C 8B 4E 10 8B 46 1C 45",
                "E8 ?? ?? ?? ?? 4C 8B 47 10 44 8B 4F 1C 45"]
             : ["E8 ?? ?? ?? ?? 4C 8B 4F 10 8B 47 1C 45"];
