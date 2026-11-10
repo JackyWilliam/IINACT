@@ -114,6 +114,13 @@ public class ServerController
             // var sslPath = GetCertPath();
             // var secure = _cfg.WSServerSSL && File.Exists(sslPath);
 
+            if (NormalizeEndpoint(Config))
+            {
+                Logger.Log(LogLevel.Warning,
+                    "WS: The saved WebSocket address or port was missing or invalid; using {0}:{1}.",
+                    Config.WSServerIP, Config.WSServerPort);
+            }
+
             var address = Config.WSServerIP == "*" ? IPAddress.Any : IPAddress.Parse(Config.WSServerIP);
 
             var server = new OverlayServer(address, Config.WSServerPort, Container, HandleFatalAcceptError);
@@ -137,6 +144,29 @@ public class ServerController
             Logger.Log(LogLevel.Error, Resources.WSStartFailed, e);
             return false;
         }
+    }
+
+    // PluginConfig only fills in 127.0.0.1:10501 when no config file exists. A file that exists
+    // without these keys (hand edits, a partial write, or a failed load with no usable backup)
+    // leaves the address null; IPAddress.Parse(null) then failed the server, and DACT treats
+    // a failed WebSocket start as a failed parser start. Repairing the saved values here also
+    // keeps the overlay URLs, which are built from the same config, valid.
+    internal static bool NormalizeEndpoint(IPluginConfig config)
+    {
+        var changed = false;
+        if (config.WSServerIP != "*" && !IPAddress.TryParse(config.WSServerIP ?? string.Empty, out _))
+        {
+            config.WSServerIP = "127.0.0.1";
+            changed = true;
+        }
+
+        if (config.WSServerPort is < 1 or > 65535)
+        {
+            config.WSServerPort = 10501;
+            changed = true;
+        }
+
+        return changed;
     }
 
     private void HandleFatalAcceptError(OverlayServer source, SocketError error)
