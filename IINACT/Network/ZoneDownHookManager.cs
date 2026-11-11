@@ -19,6 +19,9 @@ public unsafe class ZoneDownHookManager : IDisposable
     private const string Game756Version = "2026.09.01.0000.0000";
     private const string Game756HotfixVersion = "2026.09.15.0000.0000";
     private const string Game757Version = "2026.10.06.0000.0000";
+    // CN and Global share the 7.58 build number, but the CN executable keeps its key table at a
+    // different RVA (0x231F9A0 vs Unscrambler's Global 0x2322350), so CN still scans it at runtime.
+    private const string Game758Version = "2026.11.03.0000.0000";
     private readonly int[] opcodeKeyTable;
     private readonly byte[] keys = new byte[3];
     
@@ -138,7 +141,8 @@ public unsafe class ZoneDownHookManager : IDisposable
     {
         return region == Machina.FFXIV.GameRegion.Chinese &&
                (version == Chinese755HotfixGameVersion || version == Game756Version ||
-                version == Game756HotfixVersion || version == Game757Version) &&
+                version == Game756HotfixVersion || version == Game757Version ||
+                version == Game758Version) &&
                VersionConstants.Constants.TryGetValue(version, out var bundled) &&
                bundled.OpcodeKeyTableSize == opcodeKeyTableSize &&
                bundled.ObfuscatedOpcodes.Count == 19 &&
@@ -198,7 +202,7 @@ public unsafe class ZoneDownHookManager : IDisposable
         int opcodeKeyTableSize)
     {
         var bundled = VersionConstants.ForGameVersion(version);
-        // Verified CN 7.55h1/7.56/7.56h1/7.57 opcodes match Global, but executable RVAs do not.
+        // Verified CN 7.55h1/7.56/7.56h1/7.57/7.58 opcodes match Global, but executable RVAs do not.
         // ZoneDown only needs those opcodes and the key table discovered from the running process.
         return new VersionConstants
         {
